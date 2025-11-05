@@ -30,6 +30,15 @@ def parse_ticket(t):
 def engineer_features(data):
     """Create new features from the raw data."""
     data["Name_length"] = data["Name"].str.len()
+    data["Name_words"] = data["Name"].str.split().str.len()
+
+    # Extract last name (everything before the comma)
+    data["Last_name"] = data["Name"].str.split(',').str[0]
+
+    # Count passengers with the same last name
+    lastname_counts = data["Last_name"].value_counts()
+    data["Same_lastname_count"] = data["Last_name"].map(lastname_counts)
+
     data["Cabin"] = data["Cabin"].fillna("Unknown")
     data["Cabin_count"] = data['Cabin'].str.split().str.len()
     data["Deck"] = data['Cabin'].str[0]
@@ -40,8 +49,9 @@ def engineer_features(data):
 
 def get_feature_list():
     """Return the list of features to use in the model."""
-    return ["Pclass", "Sex", "SibSp", "Parch", "Age", "Name_length",
-            "Fare", "Embarked", "Cabin_count", "Deck", "Ticket_code", "Ticket_number"]
+    return ["Pclass", "Sex", "SibSp", "Parch", "Age", "Name_length", "Name_words",
+            "Same_lastname_count", "Fare", "Embarked", "Cabin_count", "Deck",
+            "Ticket_code", "Ticket_number"]
 
 
 def prepare_features(data, feature_columns):
