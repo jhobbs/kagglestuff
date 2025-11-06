@@ -9,6 +9,7 @@ from sklearn.inspection import permutation_importance, PartialDependenceDisplay
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
 from joblib import Parallel, delayed
 import multiprocessing
 
@@ -22,16 +23,22 @@ class BinaryClassifier(ABC):
     models. Subclasses implement specific model types.
     """
 
-    def __init__(self, data: BinaryClassificationData, random_state=42, **model_params):
+    def __init__(self, data: BinaryClassificationData, random_state=42,
+                 impute_strategy='mean', impute_fill_value=None, **model_params):
         """Initialize classifier with data and parameters.
 
         Args:
             data: BinaryClassificationData instance
             random_state: Random seed for reproducibility
+            impute_strategy: Strategy for imputing missing values
+                           ('mean', 'median', 'most_frequent', 'constant')
+            impute_fill_value: Fill value when impute_strategy='constant'
             **model_params: Additional parameters to pass to the model
         """
         self.data = data
         self.random_state = random_state
+        self.impute_strategy = impute_strategy
+        self.impute_fill_value = impute_fill_value
         self.model_params = model_params
         self.model = None
 
@@ -80,43 +87,87 @@ class BinaryClassifier(ABC):
         """
         pass
 
-    def _create_model_with_pipeline(self):
-        """Create model, optionally wrapped in Pipeline with imputation.
+    def create_pipeline(self, X=None):
+        """Create sklearn Pipeline with preprocessing, imputation, and classification.
 
-        If data.impute_nans is True, wraps the model in a Pipeline that:
-        - Uses mean imputation for all columns (after get_dummies, all are numeric)
+        The pipeline always includes:
+        1. ColumnTransformer - one-hot encodes categorical features
+        2. SimpleImputer - imputes missing values
+        3. Classifier - the actual model
+
+        Args:
+            X: Optional DataFrame to determine columns from. If None, uses all features from data.
 
         Returns:
-            Either a Pipeline or raw model, depending on imputation needs
+            Pipeline instance
         """
+        # Ensure features are prepared
+        self.data.prepare_features()
+
+        # Get categorical and numerical feature columns
+        all_categorical_cols = self.data.get_categorical_feature_columns()
+        all_numerical_cols = self.data.get_numerical_feature_columns()
+
+        # If X is provided, filter to only columns present in X
+        if X is not None:
+            available_cols = set(X.columns)
+            categorical_cols = [c for c in all_categorical_cols if c in available_cols]
+            numerical_cols = [c for c in all_numerical_cols if c in available_cols]
+        else:
+            categorical_cols = all_categorical_cols
+            numerical_cols = all_numerical_cols
+
+        # Create preprocessing transformer
+        # OneHotEncoder for categorical, passthrough for numerical
+        transformers = []
+        if categorical_cols:
+            transformers.append(('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_cols))
+        if numerical_cols:
+            transformers.append(('num', 'passthrough', numerical_cols))
+
+        preprocessor = ColumnTransformer(transformers=transformers)
+
+        # Create imputer with configurable strategy
+        if self.impute_strategy == 'constant':
+            imputer = SimpleImputer(strategy='constant', fill_value=self.impute_fill_value)
+        else:
+            imputer = SimpleImputer(strategy=self.impute_strategy)
+
+        # Create classifier model
         model = self.create_model()
 
-        if not self.data.impute_nans:
-            return model
-
-        # After get_dummies() and conversion to float, all columns are numeric
-        # Use simple mean imputation for all columns
-        imputer = SimpleImputer(strategy='mean')
-
-        # Wrap in pipeline
+        # Build pipeline
         pipeline = Pipeline([
+            ('preprocessing', preprocessor),
             ('imputer', imputer),
             ('classifier', model)
         ])
 
         return pipeline
 
+    def _get_feature_names_from_pipeline(self, pipeline):
+        """Extract feature names after preprocessing step in pipeline.
+
+        Args:
+            pipeline: Fitted Pipeline instance
+
+        Returns:
+            List of feature names
+        """
+        preprocessor = pipeline.named_steps['preprocessing']
+        return list(preprocessor.get_feature_names_out())
+
     def train(self):
         """Train model on all available data.
 
         Returns:
-            Trained model instance
+            Trained Pipeline instance
         """
         print(f"\n=== Training Final Model ===")
         print(f"Parameters: {self.model_params}\n")
 
         X, y = self.data.get_X_y()
-        self.model = self._create_model_with_pipeline()
+        self.model = self.create_pipeline()
         self.model.fit(X, y)
 
         print("Model trained successfully on full dataset")
@@ -135,9 +186,9 @@ class BinaryClassifier(ABC):
         print(f"Parameters: {self.model_params}, cv_folds={cv_folds}\n")
 
         X, y = self.data.get_X_y()
-        model = self._create_model_with_pipeline()
+        pipeline = self.create_pipeline()
 
-        scores = cross_val_score(model, X, y, cv=cv_folds, scoring='accuracy')
+        scores = cross_val_score(pipeline, X, y, cv=cv_folds, scoring='accuracy')
 
         print(f"Cross-Validation Scores: {scores}")
         print(f"Mean Accuracy: {scores.mean():.4f}")
@@ -165,21 +216,26 @@ class BinaryClassifier(ABC):
             X, y, test_size=0.2, random_state=self.random_state
         )
 
-        # Train model
-        model = self._create_model_with_pipeline()
-        model.fit(X_train, y_train)
+        # Train pipeline
+        pipeline = self.create_pipeline()
+        pipeline.fit(X_train, y_train)
 
         # Calculate permutation importance
+        # NOTE: Permutation importance operates on the INPUT features (raw),
+        # not the transformed features (after one-hot encoding)
         result = permutation_importance(
-            model, X_val, y_val,
+            pipeline, X_val, y_val,
             n_repeats=n_repeats,
             random_state=self.random_state,
             scoring='accuracy'
         )
 
+        # Use raw feature names (before preprocessing)
+        feature_names = X_val.columns
+
         # Create DataFrame with results
-        importances = pd.Series(result.importances_mean, index=X_val.columns)
-        importances_std = pd.Series(result.importances_std, index=X_val.columns)
+        importances = pd.Series(result.importances_mean, index=feature_names)
+        importances_std = pd.Series(result.importances_std, index=feature_names)
 
         # Sort by importance
         importances = importances.sort_values(ascending=False)
@@ -282,9 +338,9 @@ class BinaryClassifier(ABC):
         # Temporarily override random_state for this repeat
         original_random_state = self.random_state
         self.random_state = seed
-        model = self._create_model_with_pipeline()
+        pipeline = self.create_pipeline(X)
         self.random_state = original_random_state
-        base_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
+        base_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
         base_score = base_scores.mean()
 
         print(f"Baseline accuracy: {base_score:.4f} (+/- {base_scores.std():.4f})\n")
@@ -296,9 +352,9 @@ class BinaryClassifier(ABC):
             reduced_X = X.drop(columns=[col])
             # Temporarily override random_state for this repeat
             self.random_state = seed
-            model = self._create_model_with_pipeline()
+            pipeline = self.create_pipeline(reduced_X)
             self.random_state = original_random_state
-            cv_scores = cross_val_score(model, reduced_X, y, cv=cv, scoring='accuracy')
+            cv_scores = cross_val_score(pipeline, reduced_X, y, cv=cv, scoring='accuracy')
             score = cv_scores.mean()
             importance = base_score - score
 
@@ -322,20 +378,27 @@ class BinaryClassifier(ABC):
 
         X, y = self.data.get_X_y()
 
-        # Train model
-        model = self._create_model_with_pipeline()
-        model.fit(X, y)
+        # Train pipeline
+        pipeline = self.create_pipeline()
+        pipeline.fit(X, y)
 
         # Determine which features to plot
         if features:
             plot_features = features
         else:
-            # Auto-detect numerical features (not one-hot encoded)
+            # Auto-detect numerical features (exclude categorical)
+            categorical_cols = self.data.get_categorical_feature_columns()
+            numerical_cols = self.data.get_numerical_feature_columns()
+
+            # Only plot continuous numerical features (not binary indicators)
             plot_features = []
-            for col in X.columns:
-                unique_vals = X[col].dropna().unique()
-                if len(unique_vals) > 2 or not set(unique_vals).issubset({0.0, 1.0}):
-                    plot_features.append(col)
+            for col in numerical_cols:
+                if col not in categorical_cols:
+                    unique_vals = X[col].dropna().unique()
+                    # Include if more than 2 unique values (not binary)
+                    if len(unique_vals) > 2:
+                        plot_features.append(col)
+
             print(f"Auto-detected {len(plot_features)} numerical features")
 
         # Filter to valid features
@@ -358,7 +421,7 @@ class BinaryClassifier(ABC):
         # Create plot
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
         display = PartialDependenceDisplay.from_estimator(
-            model, X, valid_features,
+            pipeline, X, valid_features,
             kind='average',
             random_state=self.random_state,
             ax=ax

@@ -77,12 +77,8 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
 
     args = parser.parse_args()
 
-    # Check if classifier can handle NaN values
-    # If not, data class will impute missing values
-    impute_nans = not classifier_class.handles_nan()
-
-    # Initialize data with imputation flag
-    data = data_class(args.data, impute_nans=impute_nans)
+    # Initialize data
+    data = data_class(args.data)
 
     # Extract classifier-specific parameters from args
     classifier_kwargs = {}

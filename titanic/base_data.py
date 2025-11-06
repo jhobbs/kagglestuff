@@ -13,15 +13,13 @@ class BinaryClassificationData(ABC):
     Subclasses must implement dataset-specific logic.
     """
 
-    def __init__(self, filepath, impute_nans=False):
+    def __init__(self, filepath):
         """Initialize with path to data file.
 
         Args:
             filepath: Path to CSV file containing the data
-            impute_nans: Whether to impute missing values (for classifiers that can't handle NaN)
         """
         self.filepath = filepath
-        self.impute_nans = impute_nans
         self.raw_data = None
         self.processed_data = None
         self.X = None
@@ -63,10 +61,33 @@ class BinaryClassificationData(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_categorical_feature_columns(self):
+        """Return list of feature column names that are categorical.
+
+        These will be one-hot encoded in the pipeline.
+
+        Returns:
+            List of column names
+        """
+        pass
+
+    @abstractmethod
+    def get_numerical_feature_columns(self):
+        """Return list of feature column names that are numerical.
+
+        These will be passed through without encoding.
+
+        Returns:
+            List of column names
+        """
+        pass
+
     def prepare_features(self):
         """Prepare feature matrix X and target vector y.
 
-        Loads data, engineers features, and creates model-ready arrays.
+        Loads data, engineers features, and creates model-ready DataFrame.
+        NOTE: One-hot encoding is now handled in the sklearn Pipeline.
         """
         if self._prepared:
             return
@@ -86,12 +107,8 @@ class BinaryClassificationData(ABC):
         # Get feature columns
         feature_cols = self.get_feature_columns()
 
-        # Create feature matrix with one-hot encoding
-        self.X = pd.get_dummies(self.processed_data[feature_cols])
-
-        # Convert all numeric columns to float to avoid sklearn warnings
-        numeric_cols = self.X.select_dtypes(include=['int64', 'int32']).columns
-        self.X[numeric_cols] = self.X[numeric_cols].astype(float)
+        # Create feature matrix WITHOUT one-hot encoding (handled in Pipeline now)
+        self.X = self.processed_data[feature_cols].copy()
 
         self._prepared = True
 
@@ -149,13 +166,16 @@ class BinaryClassificationData(ABC):
         print(f"\n=== Generating Feature Correlation Matrix ===\n")
 
         X, _ = self.get_X_y()
-        print(f"Computing correlations for {len(X.columns)} features...")
+
+        # Apply one-hot encoding for correlation calculation
+        X_encoded = pd.get_dummies(X)
+        print(f"Computing correlations for {len(X_encoded.columns)} features...")
 
         # Calculate correlation matrix
-        corr = X.corr()
+        corr = X_encoded.corr()
 
         # Create figure
-        fig_size = max(10, len(X.columns) * 0.3)
+        fig_size = max(10, len(X_encoded.columns) * 0.3)
         plt.figure(figsize=(fig_size, fig_size))
 
         # Create heatmap
@@ -163,7 +183,7 @@ class BinaryClassificationData(ABC):
             corr,
             cmap='coolwarm',
             center=0,
-            annot=len(X.columns) <= 20,
+            annot=len(X_encoded.columns) <= 20,
             fmt='.2f',
             square=True,
             linewidths=0.5,

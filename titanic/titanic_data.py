@@ -32,6 +32,28 @@ class TitanicData(BinaryClassificationData):
 
         return base_features + ticket_token_cols
 
+    def get_categorical_feature_columns(self):
+        """Return list of categorical feature columns (object dtype).
+
+        These columns will be one-hot encoded by the Pipeline.
+        """
+        return ["Embarked", "Deck"]
+
+    def get_numerical_feature_columns(self):
+        """Return list of numerical feature columns.
+
+        These columns will pass through the Pipeline without encoding.
+        """
+        # Must be called after feature engineering
+        if self.processed_data is None:
+            raise ValueError("Must call engineer_features() before get_numerical_feature_columns()")
+
+        # Get all features except categorical ones
+        all_features = self.get_feature_columns()
+        categorical = self.get_categorical_feature_columns()
+        numerical = [f for f in all_features if f not in categorical]
+        return numerical
+
     def engineer_features(self):
         """Create Titanic-specific features."""
         data = self.processed_data
