@@ -121,7 +121,7 @@ class BinaryClassifier(ABC):
         # OneHotEncoder for categorical, passthrough for numerical
         transformers = []
         if categorical_cols:
-            transformers.append(('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_cols))
+            transformers.append(('cat', OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=False), categorical_cols))
         if numerical_cols:
             transformers.append(('num', 'passthrough', numerical_cols))
 
