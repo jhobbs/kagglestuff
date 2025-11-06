@@ -20,6 +20,8 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument('--data', type=str, default=default_data_path,
                               help=f'Path to training data (default: {default_data_path})')
+    parent_parser.add_argument('--random-state', type=int, default=None,
+                              help='Random seed for reproducibility (default: None, uses random seed)')
 
     # Dynamically add classifier-specific arguments
     classifier_args = classifier_class.get_cli_arguments()
@@ -75,6 +77,14 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     inspect_parser = subparsers.add_parser('inspect', parents=[parent_parser],
                                           help='Inspect data quality and show NaN statistics')
 
+    # Submit command (for Kaggle competitions)
+    submit_parser = subparsers.add_parser('submit', parents=[parent_parser],
+                                         help='Train model and generate predictions for test data')
+    submit_parser.add_argument('--test-data', type=str, default='./test.csv',
+                              help='Path to test data (default: ./test.csv)')
+    submit_parser.add_argument('--output', type=str, default='submission.csv',
+                              help='Path to save submission file (default: submission.csv)')
+
     args = parser.parse_args()
 
     # Initialize data
@@ -89,7 +99,7 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
             classifier_kwargs[arg_name] = getattr(args, arg_name)
 
     # Initialize classifier with dynamic parameters
-    classifier = classifier_class(data, random_state=42, **classifier_kwargs)
+    classifier = classifier_class(data, random_state=args.random_state, **classifier_kwargs)
 
     # Execute the appropriate command
     if args.command == 'cv':
@@ -109,5 +119,10 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
         data.plot_correlation_matrix()
     elif args.command == 'inspect':
         data.inspect_data()
+    elif args.command == 'submit':
+        classifier.predict_submission(
+            test_filepath=args.test_data,
+            output_file=args.output
+        )
     else:
         parser.print_help()

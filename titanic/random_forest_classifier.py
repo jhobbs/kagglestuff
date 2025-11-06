@@ -9,14 +9,14 @@ class RandomForestBinaryClassifier(BinaryClassifier):
     """Random Forest implementation of binary classifier."""
 
     def __init__(self, data: BinaryClassificationData, n_estimators=100, max_depth=20,
-                 random_state=42, impute_strategy='mean', impute_fill_value=None, **kwargs):
+                 random_state=None, impute_strategy='mean', impute_fill_value=None, **kwargs):
         """Initialize Random Forest classifier.
 
         Args:
             data: BinaryClassificationData instance
             n_estimators: Number of trees in the forest
             max_depth: Maximum depth of trees
-            random_state: Random seed
+            random_state: Random seed (None for random)
             impute_strategy: Strategy for imputing missing values
             impute_fill_value: Fill value when impute_strategy='constant'
             **kwargs: Additional parameters for RandomForestClassifier

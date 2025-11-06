@@ -23,13 +23,13 @@ class BinaryClassifier(ABC):
     models. Subclasses implement specific model types.
     """
 
-    def __init__(self, data: BinaryClassificationData, random_state=42,
+    def __init__(self, data: BinaryClassificationData, random_state=None,
                  impute_strategy='mean', impute_fill_value=None, **model_params):
         """Initialize classifier with data and parameters.
 
         Args:
             data: BinaryClassificationData instance
-            random_state: Random seed for reproducibility
+            random_state: Random seed for reproducibility (None for random)
             impute_strategy: Strategy for imputing missing values
                            ('mean', 'median', 'most_frequent', 'constant')
             impute_fill_value: Fill value when impute_strategy='constant'
@@ -433,3 +433,61 @@ class BinaryClassifier(ABC):
         plt.show()
 
         return display
+
+    def predict_submission(self, test_filepath, output_file='submission.csv'):
+        """Train on full dataset and predict on test data for competition submission.
+
+        Requires that the data class has a load_and_prepare_test() method.
+
+        Args:
+            test_filepath: Path to test CSV file
+            output_file: Path to save submission CSV
+
+        Returns:
+            DataFrame with predictions (PassengerId, target column)
+        """
+        print(f"\n=== Generating Competition Submission ===")
+        print(f"Parameters: {self.model_params}")
+        print(f"Test data: {test_filepath}")
+        print(f"Output file: {output_file}\n")
+
+        # Check if data class supports test data loading
+        if not hasattr(self.data, 'load_and_prepare_test'):
+            raise NotImplementedError(
+                f"{type(self.data).__name__} does not implement load_and_prepare_test()"
+            )
+
+        # Train on full training dataset
+        print("Training model on full training dataset...")
+        X, y = self.data.get_X_y()
+        pipeline = self.create_pipeline()
+        pipeline.fit(X, y)
+        print(f"Model trained on {len(X)} samples\n")
+
+        # Load and prepare test data
+        print("Loading and preparing test data...")
+        X_test, passenger_ids = self.data.load_and_prepare_test(test_filepath)
+        print(f"Test data prepared: {len(X_test)} samples\n")
+
+        # Make predictions
+        print("Making predictions...")
+        predictions = pipeline.predict(X_test)
+        print(f"Predictions complete\n")
+
+        # Create submission DataFrame
+        target_col = self.data.get_target_column()
+        submission = pd.DataFrame({
+            'PassengerId': passenger_ids,
+            target_col: predictions
+        })
+
+        # Save to CSV
+        submission.to_csv(output_file, index=False)
+        print(f"Submission saved to: {output_file}")
+        print(f"\nSubmission preview:")
+        print(submission.head(10))
+        print(f"...")
+        print(f"\nPrediction distribution:")
+        print(submission[target_col].value_counts().sort_index())
+
+        return submission

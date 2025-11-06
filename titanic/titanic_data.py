@@ -9,6 +9,15 @@ from base_data import BinaryClassificationData
 class TitanicData(BinaryClassificationData):
     """Titanic dataset implementation with domain-specific feature engineering."""
 
+    def __init__(self, filepath):
+        """Initialize with path to data file.
+
+        Args:
+            filepath: Path to CSV file containing the data
+        """
+        super().__init__(filepath)
+        self.ticket_tokens = None  # Store discovered ticket tokens from training data
+
     def load_data(self):
         """Load Titanic training data from CSV."""
         self.raw_data = pd.read_csv(self.filepath)
@@ -54,8 +63,13 @@ class TitanicData(BinaryClassificationData):
         numerical = [f for f in all_features if f not in categorical]
         return numerical
 
-    def engineer_features(self):
-        """Create Titanic-specific features."""
+    def engineer_features(self, use_stored_tokens=False):
+        """Create Titanic-specific features.
+
+        Args:
+            use_stored_tokens: If True, use self.ticket_tokens instead of discovering new ones.
+                              Used for test data to ensure same features as training data.
+        """
         data = self.processed_data
 
         # Gender feature
@@ -79,15 +93,65 @@ class TitanicData(BinaryClassificationData):
         )
 
         # Ticket token features (boolean indicators for ticket prefixes)
-        all_tokens = set()
-        for ticket in data["Ticket"]:
-            all_tokens.update(self._tokenize_ticket(ticket))
+        if use_stored_tokens and self.ticket_tokens is not None:
+            # Use stored tokens from training data
+            all_tokens = self.ticket_tokens
+        else:
+            # Discover tokens from this data and store them
+            all_tokens = set()
+            for ticket in data["Ticket"]:
+                all_tokens.update(self._tokenize_ticket(ticket))
+            # Store tokens for later use with test data
+            self.ticket_tokens = all_tokens
 
         for token in sorted(all_tokens):
             feature_name = f"ticket_token_{token}"
             data[feature_name] = data["Ticket"].apply(
                 lambda x: 1 if token in self._tokenize_ticket(x) else 0
             )
+
+    def load_and_prepare_test(self, test_filepath):
+        """Load and prepare test data using the same features as training data.
+
+        IMPORTANT: Must be called AFTER training data has been prepared, so that
+        ticket_tokens are already discovered.
+
+        Args:
+            test_filepath: Path to test CSV file
+
+        Returns:
+            Tuple of (X_test, passenger_ids) where X_test is the feature DataFrame
+            and passenger_ids is the PassengerId column
+        """
+        if self.ticket_tokens is None:
+            raise ValueError("Must prepare training data first to discover ticket tokens")
+
+        # Load test data
+        test_data = pd.read_csv(test_filepath)
+
+        # Store PassengerId before processing
+        passenger_ids = test_data["PassengerId"].copy()
+
+        # Apply same feature engineering as training data
+        test_processed = test_data.copy()
+
+        # Temporarily set processed_data to test data for feature engineering
+        original_processed = self.processed_data
+        self.processed_data = test_processed
+
+        # Engineer features using stored tokens
+        self.engineer_features(use_stored_tokens=True)
+
+        # Get feature columns
+        feature_cols = self.get_feature_columns()
+
+        # Create feature matrix
+        X_test = self.processed_data[feature_cols].copy()
+
+        # Restore original processed_data
+        self.processed_data = original_processed
+
+        return X_test, passenger_ids
 
     @staticmethod
     def _tokenize_ticket(ticket):

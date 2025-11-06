@@ -13,14 +13,14 @@ class LogisticRegressionBinaryClassifier(BinaryClassifier):
     """
 
     def __init__(self, data: BinaryClassificationData, C=1.0, max_iter=100,
-                 random_state=42, impute_strategy='mean', impute_fill_value=None, **kwargs):
+                 random_state=None, impute_strategy='mean', impute_fill_value=None, **kwargs):
         """Initialize Logistic Regression classifier.
 
         Args:
             data: BinaryClassificationData instance
             C: Inverse of regularization strength
             max_iter: Maximum number of iterations
-            random_state: Random seed
+            random_state: Random seed (None for random)
             impute_strategy: Strategy for imputing missing values
             impute_fill_value: Fill value when impute_strategy='constant'
             **kwargs: Additional parameters for LogisticRegression
