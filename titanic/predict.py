@@ -56,7 +56,6 @@ def engineer_features(data):
     data["Male"] = (data["Sex"] == "male").astype(int)
 
     data["Name_length"] = data["Name"].str.len()
-    data["Name_words"] = data["Name"].str.split().str.len()
 
     # Extract last name (everything before the comma)
     data["Last_name"] = data["Name"].str.split(',').str[0]
@@ -95,7 +94,7 @@ def engineer_features(data):
 
 def get_feature_list():
     """Return the list of base features to use in the model."""
-    return ["Pclass", "Male", "SibSp", "Parch", "Age", "Name_length", "Name_words",
+    return ["Pclass", "Male", "SibSp", "Parch", "Age", "Name_length",
             "Same_lastname_count", "Fare", "Embarked", "Cabin_count", "Deck",
             "Ticket_number", "Ticket_number_length"]
 
