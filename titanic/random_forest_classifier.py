@@ -22,6 +22,37 @@ class RandomForestBinaryClassifier(BinaryClassifier):
         super().__init__(data, random_state=random_state,
                         n_estimators=n_estimators, max_depth=max_depth, **kwargs)
 
+    @classmethod
+    def get_cli_arguments(cls):
+        """Return Random Forest specific CLI arguments.
+
+        Returns:
+            List of argument definition dicts for RF parameters
+        """
+        return [
+            {
+                'name': '--n-estimators',
+                'type': int,
+                'default': 100,
+                'help': 'Number of trees in random forest (default: 100)'
+            },
+            {
+                'name': '--max-depth',
+                'type': int,
+                'default': 20,
+                'help': 'Maximum depth of trees (default: 20)'
+            }
+        ]
+
+    @classmethod
+    def handles_nan(cls):
+        """Random Forest can handle NaN values natively.
+
+        Returns:
+            bool: True (RandomForest handles NaN)
+        """
+        return True
+
     def create_model(self):
         """Create a new RandomForestClassifier instance.
 

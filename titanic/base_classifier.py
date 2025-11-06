@@ -6,6 +6,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import cross_val_score, train_test_split, StratifiedKFold
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
 from joblib import Parallel, delayed
 import multiprocessing
 
@@ -32,6 +35,42 @@ class BinaryClassifier(ABC):
         self.model_params = model_params
         self.model = None
 
+    @classmethod
+    def get_cli_arguments(cls):
+        """Return list of argparse argument definitions for this classifier.
+
+        Each argument should be a dict with keys: 'name', 'type', 'default', 'help'
+        Subclasses should override to define their specific parameters.
+
+        Returns:
+            List of argument definition dicts
+
+        Example:
+            [
+                {'name': '--n-estimators', 'type': int, 'default': 100,
+                 'help': 'Number of trees'},
+                {'name': '--max-depth', 'type': int, 'default': 20,
+                 'help': 'Maximum depth of trees'}
+            ]
+        """
+        return []
+
+    @classmethod
+    def handles_nan(cls):
+        """Return whether this classifier can handle NaN values natively.
+
+        Subclasses should override this if they can handle NaN values.
+        If False, the framework will automatically add imputation via Pipeline.
+
+        Returns:
+            bool: True if classifier handles NaN, False if imputation needed
+
+        Example:
+            RandomForest handles NaN → True
+            LogisticRegression needs imputation → False
+        """
+        return False
+
     @abstractmethod
     def create_model(self):
         """Create and return a new model instance.
@@ -40,6 +79,32 @@ class BinaryClassifier(ABC):
             Untrained model instance
         """
         pass
+
+    def _create_model_with_pipeline(self):
+        """Create model, optionally wrapped in Pipeline with imputation.
+
+        If data.impute_nans is True, wraps the model in a Pipeline that:
+        - Uses mean imputation for all columns (after get_dummies, all are numeric)
+
+        Returns:
+            Either a Pipeline or raw model, depending on imputation needs
+        """
+        model = self.create_model()
+
+        if not self.data.impute_nans:
+            return model
+
+        # After get_dummies() and conversion to float, all columns are numeric
+        # Use simple mean imputation for all columns
+        imputer = SimpleImputer(strategy='mean')
+
+        # Wrap in pipeline
+        pipeline = Pipeline([
+            ('imputer', imputer),
+            ('classifier', model)
+        ])
+
+        return pipeline
 
     def train(self):
         """Train model on all available data.
@@ -51,7 +116,7 @@ class BinaryClassifier(ABC):
         print(f"Parameters: {self.model_params}\n")
 
         X, y = self.data.get_X_y()
-        self.model = self.create_model()
+        self.model = self._create_model_with_pipeline()
         self.model.fit(X, y)
 
         print("Model trained successfully on full dataset")
@@ -70,7 +135,7 @@ class BinaryClassifier(ABC):
         print(f"Parameters: {self.model_params}, cv_folds={cv_folds}\n")
 
         X, y = self.data.get_X_y()
-        model = self.create_model()
+        model = self._create_model_with_pipeline()
 
         scores = cross_val_score(model, X, y, cv=cv_folds, scoring='accuracy')
 
@@ -101,7 +166,7 @@ class BinaryClassifier(ABC):
         )
 
         # Train model
-        model = self.create_model()
+        model = self._create_model_with_pipeline()
         model.fit(X_train, y_train)
 
         # Calculate permutation importance
@@ -214,8 +279,11 @@ class BinaryClassifier(ABC):
 
         # Get baseline score
         print(f"Computing baseline score with all {len(X.columns)} features...")
-        model = self.create_model()
-        model.random_state = seed
+        # Temporarily override random_state for this repeat
+        original_random_state = self.random_state
+        self.random_state = seed
+        model = self._create_model_with_pipeline()
+        self.random_state = original_random_state
         base_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
         base_score = base_scores.mean()
 
@@ -226,8 +294,10 @@ class BinaryClassifier(ABC):
         repeat_importances = {}
         for i, col in enumerate(X.columns, 1):
             reduced_X = X.drop(columns=[col])
-            model = self.create_model()
-            model.random_state = seed
+            # Temporarily override random_state for this repeat
+            self.random_state = seed
+            model = self._create_model_with_pipeline()
+            self.random_state = original_random_state
             cv_scores = cross_val_score(model, reduced_X, y, cv=cv, scoring='accuracy')
             score = cv_scores.mean()
             importance = base_score - score
@@ -253,7 +323,7 @@ class BinaryClassifier(ABC):
         X, y = self.data.get_X_y()
 
         # Train model
-        model = self.create_model()
+        model = self._create_model_with_pipeline()
         model.fit(X, y)
 
         # Determine which features to plot

@@ -20,10 +20,16 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument('--data', type=str, default=default_data_path,
                               help=f'Path to training data (default: {default_data_path})')
-    parent_parser.add_argument('--n-estimators', type=int, default=100,
-                              help='Number of trees in random forest (default: 100)')
-    parent_parser.add_argument('--max-depth', type=int, default=20,
-                              help='Maximum depth of trees (default: 20)')
+
+    # Dynamically add classifier-specific arguments
+    classifier_args = classifier_class.get_cli_arguments()
+    for arg_def in classifier_args:
+        parent_parser.add_argument(
+            arg_def['name'],
+            type=arg_def['type'],
+            default=arg_def['default'],
+            help=arg_def['help']
+        )
 
     # Main parser
     parser = argparse.ArgumentParser(description=description)
@@ -65,16 +71,29 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     corr_parser = subparsers.add_parser('correlation', parents=[parent_parser],
                                         help='Generate feature correlation matrix heatmap')
 
+    # Inspect command
+    inspect_parser = subparsers.add_parser('inspect', parents=[parent_parser],
+                                          help='Inspect data quality and show NaN statistics')
+
     args = parser.parse_args()
 
-    # Initialize data and classifier
-    data = data_class(args.data)
-    classifier = classifier_class(
-        data,
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth,
-        random_state=42
-    )
+    # Check if classifier can handle NaN values
+    # If not, data class will impute missing values
+    impute_nans = not classifier_class.handles_nan()
+
+    # Initialize data with imputation flag
+    data = data_class(args.data, impute_nans=impute_nans)
+
+    # Extract classifier-specific parameters from args
+    classifier_kwargs = {}
+    for arg_def in classifier_args:
+        # Convert '--arg-name' to 'arg_name' for attribute access
+        arg_name = arg_def['name'].lstrip('-').replace('-', '_')
+        if hasattr(args, arg_name):
+            classifier_kwargs[arg_name] = getattr(args, arg_name)
+
+    # Initialize classifier with dynamic parameters
+    classifier = classifier_class(data, random_state=42, **classifier_kwargs)
 
     # Execute the appropriate command
     if args.command == 'cv':
@@ -92,5 +111,7 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
         classifier.plot_partial_dependence(features=args.features)
     elif args.command == 'correlation':
         data.plot_correlation_matrix()
+    elif args.command == 'inspect':
+        data.inspect_data()
     else:
         parser.print_help()

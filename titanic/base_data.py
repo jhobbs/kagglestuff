@@ -13,13 +13,15 @@ class BinaryClassificationData(ABC):
     Subclasses must implement dataset-specific logic.
     """
 
-    def __init__(self, filepath):
+    def __init__(self, filepath, impute_nans=False):
         """Initialize with path to data file.
 
         Args:
             filepath: Path to CSV file containing the data
+            impute_nans: Whether to impute missing values (for classifiers that can't handle NaN)
         """
         self.filepath = filepath
+        self.impute_nans = impute_nans
         self.raw_data = None
         self.processed_data = None
         self.X = None
@@ -103,6 +105,38 @@ class BinaryClassificationData(ABC):
             self.prepare_features()
         return self.X, self.y
 
+    def get_numeric_columns(self):
+        """Return list of numeric column names from prepared features.
+
+        Returns:
+            List of column names that are numeric/continuous
+        """
+        if not self._prepared:
+            self.prepare_features()
+
+        # Numeric columns are those with float dtype
+        numeric_cols = self.X.select_dtypes(include=['float64', 'float32']).columns.tolist()
+        return numeric_cols
+
+    def get_categorical_columns(self):
+        """Return list of categorical column names from prepared features.
+
+        This includes one-hot encoded features and integer features.
+
+        Returns:
+            List of column names that are categorical/discrete
+        """
+        if not self._prepared:
+            self.prepare_features()
+
+        # Categorical columns are those with int dtype or object dtype
+        # (though after get_dummies, most will be float)
+        # For our purposes, columns not in numeric are categorical
+        all_cols = set(self.X.columns)
+        numeric_cols = set(self.get_numeric_columns())
+        categorical_cols = list(all_cols - numeric_cols)
+        return categorical_cols
+
     def plot_correlation_matrix(self, output_file='correlation_matrix.png'):
         """Generate and save feature correlation heatmap.
 
@@ -157,3 +191,74 @@ class BinaryClassificationData(ABC):
             print("  No highly correlated pairs found.")
 
         return corr
+
+    def inspect_data(self):
+        """Inspect data quality and print detailed statistics.
+
+        Shows information about NaN values, data shape, and feature distributions.
+
+        Returns:
+            Dict containing inspection results
+        """
+        print("="*80)
+        print("DATA INSPECTION")
+        print("="*80)
+
+        X, y = self.get_X_y()
+
+        # Check for NaN values
+        nan_counts = X.isna().sum()
+        nan_columns = nan_counts[nan_counts > 0].sort_values(ascending=False)
+
+        print(f"\n{'='*80}")
+        print("NaN VALUE ANALYSIS")
+        print("="*80)
+
+        if len(nan_columns) > 0:
+            print(f"\nFound {len(nan_columns)} columns with NaN values:\n")
+            for col, count in nan_columns.items():
+                pct = (count / len(X)) * 100
+                print(f"  {col:40s}: {count:4d} NaNs ({pct:5.2f}%)")
+
+            print(f"\nFeatures with NaN: {len(nan_columns)}/{len(X.columns)}")
+            print(f"Features without NaN: {len(X.columns) - len(nan_columns)}/{len(X.columns)}")
+        else:
+            print("\nNo NaN values found in any column!")
+
+        # Show summary statistics
+        print(f"\n{'='*80}")
+        print("DATA SHAPE")
+        print("="*80)
+        print(f"Rows: {len(X)}")
+        print(f"Columns: {len(X.columns)}")
+        print(f"Total cells: {len(X) * len(X.columns)}")
+        total_nans = X.isna().sum().sum()
+        print(f"Total NaN cells: {total_nans}")
+        if len(X) * len(X.columns) > 0:
+            pct_nan = (total_nans / (len(X) * len(X.columns))) * 100
+            print(f"Percentage NaN: {pct_nan:.2f}%")
+
+        # Target variable info
+        print(f"\n{'='*80}")
+        print("TARGET VARIABLE")
+        print("="*80)
+        print(f"Name: {self.get_target_column()}")
+        print(f"Class distribution:")
+        for value, count in y.value_counts().sort_index().items():
+            pct = (count / len(y)) * 100
+            print(f"  {value}: {count} ({pct:.2f}%)")
+
+        # Show sample of columns with NaNs
+        if len(nan_columns) > 0:
+            print(f"\n{'='*80}")
+            print("SAMPLE OF COLUMNS WITH NaN VALUES (first 10 rows)")
+            print("="*80)
+            sample_cols = list(nan_columns.head(5).index)
+            print(X[sample_cols].head(10))
+
+        return {
+            'shape': X.shape,
+            'nan_columns': nan_columns.to_dict(),
+            'total_nans': total_nans,
+            'target_distribution': y.value_counts().to_dict()
+        }
