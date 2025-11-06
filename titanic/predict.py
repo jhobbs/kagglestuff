@@ -7,6 +7,8 @@ import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+from joblib import Parallel, delayed
+import multiprocessing
 
 
 def load_data(filepath):
@@ -195,10 +197,55 @@ def calculate_feature_importance(args):
     return importances
 
 
+def _run_single_repeat(repeat, seed, X, y, n_estimators, max_depth, cv_folds, num_repeats):
+    """Helper function to run a single repeat of drop-column importance calculation."""
+    from sklearn.model_selection import StratifiedKFold
+
+    if num_repeats > 1:
+        print(f"\n--- Repeat {repeat + 1}/{num_repeats} (seed={seed}) ---")
+
+    # Use a fixed CV splitter for consistency within this repeat
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+
+    # Create model
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        random_state=seed
+    )
+
+    # Get baseline score with all features
+    print(f"Computing baseline score with all {len(X.columns)} features...")
+    base_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
+    base_score = base_scores.mean()
+
+    print(f"Baseline accuracy: {base_score:.4f} (+/- {base_scores.std():.4f})\n")
+    print(f"Computing drop-column importance for each feature...")
+
+    # Calculate importance by dropping each column
+    repeat_importances = {}
+    for i, col in enumerate(X.columns, 1):
+        # Drop one column and evaluate
+        reduced_X = X.drop(columns=[col])
+        cv_scores = cross_val_score(model, reduced_X, y, cv=cv, scoring='accuracy')
+        score = cv_scores.mean()
+        importance = base_score - score  # positive = important (dropping it hurts)
+
+        repeat_importances[col] = importance
+        print(f"  [{i}/{len(X.columns)}] {col}: {importance:+.4f} (score without: {score:.4f})")
+
+    return repeat_importances, base_score
+
+
 def calculate_drop_column_importance(args):
     """Calculate feature importance by dropping each column and measuring performance drop."""
     print(f"\n=== Calculating Drop-Column Importance ===")
-    print(f"Parameters: n_estimators={args.n_estimators}, max_depth={args.max_depth}, cv_folds={args.cv_folds}, num_repeats={args.num_repeats}\n")
+    print(f"Parameters: n_estimators={args.n_estimators}, max_depth={args.max_depth}, cv_folds={args.cv_folds}, num_repeats={args.num_repeats}")
+
+    # Determine number of parallel jobs (half of available cores)
+    n_cores = multiprocessing.cpu_count()
+    n_jobs = max(1, n_cores // 2)
+    print(f"Using {n_jobs} parallel jobs (out of {n_cores} cores)\n")
 
     # Load and prepare data
     train_data = load_data(args.data)
@@ -206,47 +253,23 @@ def calculate_drop_column_importance(args):
     features = get_feature_list()
     X, y = prepare_features(train_data, features)
 
-    from sklearn.model_selection import StratifiedKFold
+    # Run repeats in parallel
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_run_single_repeat)(
+            repeat, 42 + repeat, X, y,
+            args.n_estimators, args.max_depth, args.cv_folds, args.num_repeats
+        )
+        for repeat in range(args.num_repeats)
+    )
 
-    # Store importance values across all repeats
+    # Collect results from all repeats
     all_importances = {col: [] for col in X.columns}
     all_base_scores = []
 
-    # Repeat calculation with different random seeds
-    for repeat in range(args.num_repeats):
-        seed = 42 + repeat
-        if args.num_repeats > 1:
-            print(f"\n--- Repeat {repeat + 1}/{args.num_repeats} (seed={seed}) ---")
-
-        # Use a fixed CV splitter for consistency within this repeat
-        cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=seed)
-
-        # Create model
-        model = RandomForestClassifier(
-            n_estimators=args.n_estimators,
-            max_depth=args.max_depth,
-            random_state=seed
-        )
-
-        # Get baseline score with all features
-        print(f"Computing baseline score with all {len(X.columns)} features...")
-        base_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
-        base_score = base_scores.mean()
+    for repeat_importances, base_score in results:
         all_base_scores.append(base_score)
-
-        print(f"Baseline accuracy: {base_score:.4f} (+/- {base_scores.std():.4f})\n")
-        print(f"Computing drop-column importance for each feature...")
-
-        # Calculate importance by dropping each column
-        for i, col in enumerate(X.columns, 1):
-            # Drop one column and evaluate
-            reduced_X = X.drop(columns=[col])
-            cv_scores = cross_val_score(model, reduced_X, y, cv=cv, scoring='accuracy')
-            score = cv_scores.mean()
-            importance = base_score - score  # positive = important (dropping it hurts)
-
+        for col, importance in repeat_importances.items():
             all_importances[col].append(importance)
-            print(f"  [{i}/{len(X.columns)}] {col}: {importance:+.4f} (score without: {score:.4f})")
 
     # Calculate mean and std of importances
     mean_importances = {col: np.mean(vals) for col, vals in all_importances.items()}
