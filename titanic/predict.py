@@ -3,6 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
@@ -51,6 +52,9 @@ def parse_ticket(t):
 
 def engineer_features(data):
     """Create new features from the raw data."""
+    # Convert Sex to boolean Male feature
+    data["Male"] = (data["Sex"] == "male").astype(int)
+
     data["Name_length"] = data["Name"].str.len()
     data["Name_words"] = data["Name"].str.split().str.len()
 
@@ -91,7 +95,7 @@ def engineer_features(data):
 
 def get_feature_list():
     """Return the list of base features to use in the model."""
-    return ["Pclass", "Sex", "SibSp", "Parch", "Age", "Name_length", "Name_words",
+    return ["Pclass", "Male", "SibSp", "Parch", "Age", "Name_length", "Name_words",
             "Same_lastname_count", "Fare", "Embarked", "Cabin_count", "Deck",
             "Ticket_number", "Ticket_number_length"]
 
@@ -367,6 +371,60 @@ def plot_partial_dependence(args):
     return display
 
 
+def plot_correlation_matrix(args):
+    """Generate a correlation heatmap for all features."""
+    print(f"\n=== Generating Feature Correlation Matrix ===\n")
+
+    # Load and prepare data
+    train_data = load_data(args.data)
+    train_data = engineer_features(train_data)
+    features = get_feature_list()
+    X, y = prepare_features(train_data, features)
+
+    print(f"Computing correlations for {len(X.columns)} features...")
+
+    # Calculate correlation matrix
+    corr = X.corr()
+
+    # Create figure
+    fig_size = max(10, len(X.columns) * 0.3)  # Scale with number of features
+    plt.figure(figsize=(fig_size, fig_size))
+
+    # Create heatmap
+    sns.heatmap(
+        corr,
+        cmap='coolwarm',
+        center=0,
+        annot=len(X.columns) <= 20,  # Only show annotations if not too many features
+        fmt='.2f',
+        square=True,
+        linewidths=0.5,
+        cbar_kws={'shrink': 0.8}
+    )
+
+    plt.title("Feature Correlation Matrix", fontsize=16, pad=20)
+    plt.tight_layout()
+    plt.savefig('correlation_matrix.png', dpi=150, bbox_inches='tight')
+    print(f"Correlation matrix saved to: correlation_matrix.png")
+    plt.show()
+
+    # Print highly correlated feature pairs
+    print(f"\nHighly correlated feature pairs (|correlation| > 0.7):\n")
+    high_corr_pairs = []
+    for i in range(len(corr.columns)):
+        for j in range(i + 1, len(corr.columns)):
+            if abs(corr.iloc[i, j]) > 0.7:
+                high_corr_pairs.append((corr.columns[i], corr.columns[j], corr.iloc[i, j]))
+
+    if high_corr_pairs:
+        for feat1, feat2, corr_val in sorted(high_corr_pairs, key=lambda x: abs(x[2]), reverse=True):
+            print(f"  {feat1:30s} <-> {feat2:30s}: {corr_val:+.3f}")
+    else:
+        print("  No highly correlated pairs found.")
+
+    return corr
+
+
 def main():
     """Main function to handle command-line arguments."""
     # Parent parser for common arguments
@@ -416,6 +474,10 @@ def main():
     pdp_parser.add_argument('--features', nargs='+', type=str,
                            help='Features to plot (default: all numerical features)')
 
+    # Correlation matrix command
+    corr_parser = subparsers.add_parser('correlation', parents=[parent_parser],
+                                        help='Generate feature correlation matrix heatmap')
+
     args = parser.parse_args()
 
     # Execute the appropriate command
@@ -429,6 +491,8 @@ def main():
         train_final_model(args)
     elif args.command == 'pdp':
         plot_partial_dependence(args)
+    elif args.command == 'correlation':
+        plot_correlation_matrix(args)
     else:
         parser.print_help()
 
