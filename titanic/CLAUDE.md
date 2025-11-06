@@ -60,7 +60,8 @@ python predict.py drop-importance --cv-folds 5 --num-repeats 3
 python predict.py train
 python predict.py pdp
 python predict.py correlation
-python predict.py inspect
+python predict.py inspect  # Shows categorical value spaces from train+test by default
+python predict.py inspect --test-data ./test.csv  # Explicit test file path
 ```
 
 ### Run with Logistic Regression
@@ -83,17 +84,30 @@ python predict_lr.py cv --C 0.1 --max-iter 500
 - `train` - Train final model on full dataset
 - `pdp` - Partial dependence plots for numerical features
 - `correlation` - Feature correlation heatmap
-- `inspect` - Data quality inspection (NaN analysis, shape, target distribution)
+- `inspect` - Data quality inspection (NaN analysis, shape, target distribution, categorical value spaces)
+  - Use `--test-data` to show combined train+test categorical values (last names, ticket tokens, decks)
 
 ## Titanic-Specific Features
 
 The `TitanicData` class engineers these features from raw data:
 - **Gender**: Binary Male indicator
 - **Name features**: Name length, last name, count of passengers with same last name
-- **Cabin features**: Cabin count, deck letter
+- **Cabin features**: Cabin count, boolean indicators for each deck (A-G, T, U)
 - **Ticket features**: Numeric ticket number (log-scaled), ticket number length, boolean indicators for ticket prefix tokens (e.g., 'PC', 'STON', 'CA')
 
-Ticket tokenization creates dynamic one-hot encoded features like `ticket_token_pc`, `ticket_token_ston`, etc.
+### Categorical Feature Consistency
+
+When `prepare_for_submission()` is called, the system computes the **complete categorical value space** from train+test combined:
+- **Last names**: All unique surnames (875 total) for accurate family size counting
+- **Ticket tokens**: All unique ticket prefixes (27 total) like 'pc', 'ston', 'ca', 'aq', 'lp'
+- **Deck letters**: All unique deck values (9 total: A, B, C, D, E, F, G, T, U)
+
+This ensures train and test have **identical feature spaces**:
+- If deck 'T' only exists in train, test will still have a `Deck_T` feature (all zeros)
+- If token 'aq' only exists in test, train will still have a `ticket_token_aq` feature (all zeros)
+- Models see consistent features regardless of which dataset has which categorical values
+
+Features created: `Deck_A`, `Deck_B`, ..., `Deck_U`, `ticket_token_a`, `ticket_token_ah`, ..., `ticket_token_we`
 
 ## Python Environment
 

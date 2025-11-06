@@ -76,6 +76,8 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     # Inspect command
     inspect_parser = subparsers.add_parser('inspect', parents=[parent_parser],
                                           help='Inspect data quality and show NaN statistics')
+    inspect_parser.add_argument('--test-data', type=str, default='./test.csv',
+                               help='Path to test data for categorical value inspection (default: ./test.csv)')
 
     # Submit command (for Kaggle competitions)
     submit_parser = subparsers.add_parser('submit', parents=[parent_parser],
@@ -119,7 +121,13 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     elif args.command == 'correlation':
         data.plot_correlation_matrix()
     elif args.command == 'inspect':
-        data.inspect_data()
+        # Check if inspect_data accepts test_filepath parameter (Titanic-specific)
+        import inspect
+        sig = inspect.signature(data.inspect_data)
+        if 'test_filepath' in sig.parameters:
+            data.inspect_data(test_filepath=args.test_data)
+        else:
+            data.inspect_data()
     elif args.command == 'submit':
         classifier.predict_submission(
             test_filepath=args.test_data,
