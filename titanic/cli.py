@@ -87,7 +87,7 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
 
     args = parser.parse_args()
 
-    # Initialize data
+    # Initialize data class
     data = data_class(args.data)
 
     # Extract classifier-specific parameters from args
@@ -98,7 +98,8 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
         if hasattr(args, arg_name):
             classifier_kwargs[arg_name] = getattr(args, arg_name)
 
-    # Initialize classifier with dynamic parameters
+    # Initialize classifier with data and dynamic parameters
+    # The classifier will call data.load_data() and data.get_preprocessor() as needed
     classifier = classifier_class(data, random_state=args.random_state, **classifier_kwargs)
 
     # Execute the appropriate command

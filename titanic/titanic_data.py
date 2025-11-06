@@ -3,6 +3,10 @@
 import re
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 from base_data import BinaryClassificationData
 
 
@@ -17,15 +21,86 @@ class TitanicData(BinaryClassificationData):
         """
         super().__init__(filepath)
         self.ticket_tokens = None  # Store discovered ticket tokens from training data
+        self.lastname_counts = None  # Store lastname counts from combined train+test data
 
     def load_data(self):
-        """Load Titanic training data from CSV."""
+        """Load Titanic training data, engineer features, and return (X, y).
+
+        Returns:
+            Tuple of (X, y) where X is feature DataFrame and y is target Series
+        """
+        # Load CSV
         self.raw_data = pd.read_csv(self.filepath)
-        return self.raw_data
+
+        # Engineer features
+        self.processed_data = self.raw_data.copy()
+        self.engineer_features()
+
+        # Get target
+        self.y = self.processed_data[self.get_target_column()]
+
+        # Get feature columns
+        feature_cols = self.get_feature_columns()
+
+        # Create feature matrix (raw features, preprocessing will be done by ColumnTransformer)
+        self.X = self.processed_data[feature_cols].copy()
+
+        return self.X, self.y
 
     def get_target_column(self):
         """Return target column name."""
         return "Survived"
+
+    def get_preprocessor(self, feature_columns=None):
+        """Return unfitted ColumnTransformer for Titanic feature preprocessing.
+
+        Args:
+            feature_columns: Optional list of feature column names to include.
+                           If None, uses all available features.
+
+        Returns:
+            Unfitted sklearn ColumnTransformer with pipelines for numeric and categorical features
+        """
+        # Categorical features (object dtype, need one-hot encoding)
+        categorical_features = ["Embarked", "Deck"]
+
+        # Numeric features (all others, including binary indicators and ticket tokens)
+        # Note: Must be called after feature engineering to know all columns
+        if self.processed_data is None:
+            raise ValueError("Must engineer features before creating preprocessor")
+
+        # Determine which features to use
+        if feature_columns is None:
+            all_features = self.get_feature_columns()
+        else:
+            all_features = feature_columns
+
+        # Filter categorical and numeric features to only those present
+        categorical_features = [f for f in categorical_features if f in all_features]
+        numeric_features = [f for f in all_features if f not in categorical_features]
+
+        # Numeric pipeline: impute with mean, then scale
+        numeric_pipeline = Pipeline([
+            ('imputer', SimpleImputer(strategy='mean')),
+            ('scaler', StandardScaler())
+        ])
+
+        # Categorical pipeline: impute with most frequent, then one-hot encode
+        categorical_pipeline = Pipeline([
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+            ('onehot', OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=False))
+        ])
+
+        # Combine into ColumnTransformer
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', numeric_pipeline, numeric_features),
+                ('cat', categorical_pipeline, categorical_features)
+            ],
+            remainder='drop'  # Drop any columns not specified
+        )
+
+        return preprocessor
 
     def get_feature_columns(self):
         """Return base feature columns plus any dynamically created ones."""
@@ -78,8 +153,14 @@ class TitanicData(BinaryClassificationData):
         # Name features
         data["Name_length"] = data["Name"].str.len()
         data["Last_name"] = data["Name"].str.split(',').str[0]
-        lastname_counts = data["Last_name"].value_counts()
-        data["Same_lastname_count"] = data["Last_name"].map(lastname_counts)
+
+        # Use stored lastname counts if available (from combined train+test),
+        # otherwise compute from this dataset only
+        if self.lastname_counts is not None:
+            data["Same_lastname_count"] = data["Last_name"].map(self.lastname_counts).fillna(1)
+        else:
+            lastname_counts = data["Last_name"].value_counts()
+            data["Same_lastname_count"] = data["Last_name"].map(lastname_counts)
 
         # Cabin features
         data["Cabin"] = data["Cabin"].fillna("Unknown")
@@ -109,6 +190,52 @@ class TitanicData(BinaryClassificationData):
             data[feature_name] = data["Ticket"].apply(
                 lambda x: 1 if token in self._tokenize_ticket(x) else 0
             )
+
+    def prepare_for_submission(self, test_filepath):
+        """Prepare for submission by computing combined lastname counts.
+
+        Computes lastname counts from the combined train+test datasets to get
+        accurate family size information across the entire passenger manifest.
+
+        Args:
+            test_filepath: Path to test CSV file
+
+        Returns:
+            None
+        """
+        self.compute_combined_lastname_counts(test_filepath)
+
+    def compute_combined_lastname_counts(self, test_filepath):
+        """Compute lastname counts from combined train+test data.
+
+        This gives the most accurate picture of family sizes across the entire
+        passenger manifest. Should be called before training when doing submissions.
+
+        Args:
+            test_filepath: Path to test CSV file
+
+        Returns:
+            Series mapping lastname to count
+        """
+        # Load both datasets
+        train_data = pd.read_csv(self.filepath)
+        test_data = pd.read_csv(test_filepath)
+
+        # Extract last names from both
+        train_lastnames = train_data["Name"].str.split(',').str[0]
+        test_lastnames = test_data["Name"].str.split(',').str[0]
+
+        # Combine and count
+        all_lastnames = pd.concat([train_lastnames, test_lastnames])
+        lastname_counts = all_lastnames.value_counts()
+
+        # Store for use in feature engineering
+        self.lastname_counts = lastname_counts
+
+        print(f"Computed lastname counts from {len(train_data)} train + {len(test_data)} test passengers")
+        print(f"Found {len(lastname_counts)} unique surnames")
+
+        return lastname_counts
 
     def load_and_prepare_test(self, test_filepath):
         """Load and prepare test data using the same features as training data.

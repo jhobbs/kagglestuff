@@ -23,22 +23,16 @@ class BinaryClassifier(ABC):
     models. Subclasses implement specific model types.
     """
 
-    def __init__(self, data: BinaryClassificationData, random_state=None,
-                 impute_strategy='mean', impute_fill_value=None, **model_params):
+    def __init__(self, data: BinaryClassificationData, random_state=None, **model_params):
         """Initialize classifier with data and parameters.
 
         Args:
-            data: BinaryClassificationData instance
+            data: BinaryClassificationData instance (provides both data and preprocessor)
             random_state: Random seed for reproducibility (None for random)
-            impute_strategy: Strategy for imputing missing values
-                           ('mean', 'median', 'most_frequent', 'constant')
-            impute_fill_value: Fill value when impute_strategy='constant'
             **model_params: Additional parameters to pass to the model
         """
         self.data = data
         self.random_state = random_state
-        self.impute_strategy = impute_strategy
-        self.impute_fill_value = impute_fill_value
         self.model_params = model_params
         self.model = None
 
@@ -62,22 +56,6 @@ class BinaryClassifier(ABC):
         """
         return []
 
-    @classmethod
-    def handles_nan(cls):
-        """Return whether this classifier can handle NaN values natively.
-
-        Subclasses should override this if they can handle NaN values.
-        If False, the framework will automatically add imputation via Pipeline.
-
-        Returns:
-            bool: True if classifier handles NaN, False if imputation needed
-
-        Example:
-            RandomForest handles NaN → True
-            LogisticRegression needs imputation → False
-        """
-        return False
-
     @abstractmethod
     def create_model(self):
         """Create and return a new model instance.
@@ -88,58 +66,33 @@ class BinaryClassifier(ABC):
         pass
 
     def create_pipeline(self, X=None):
-        """Create sklearn Pipeline with preprocessing, imputation, and classification.
+        """Create sklearn Pipeline with preprocessing and classification.
 
-        The pipeline always includes:
-        1. ColumnTransformer - one-hot encodes categorical features
-        2. SimpleImputer - imputes missing values
-        3. Classifier - the actual model
+        The pipeline includes:
+        1. ColumnTransformer - handles imputation, scaling, and encoding (from data class)
+        2. Classifier - the actual model
 
         Args:
-            X: Optional DataFrame to determine columns from. If None, uses all features from data.
+            X: Optional DataFrame. If provided, only create preprocessor for columns in X.
+               This is useful for drop-column importance testing.
 
         Returns:
             Pipeline instance
         """
-        # Ensure features are prepared
-        self.data.prepare_features()
-
-        # Get categorical and numerical feature columns
-        all_categorical_cols = self.data.get_categorical_feature_columns()
-        all_numerical_cols = self.data.get_numerical_feature_columns()
-
-        # If X is provided, filter to only columns present in X
+        # Get preprocessor from data class
+        # If X is provided, only use columns present in X
         if X is not None:
-            available_cols = set(X.columns)
-            categorical_cols = [c for c in all_categorical_cols if c in available_cols]
-            numerical_cols = [c for c in all_numerical_cols if c in available_cols]
+            feature_columns = list(X.columns)
+            preprocessor = self.data.get_preprocessor(feature_columns=feature_columns)
         else:
-            categorical_cols = all_categorical_cols
-            numerical_cols = all_numerical_cols
-
-        # Create preprocessing transformer
-        # OneHotEncoder for categorical, passthrough for numerical
-        transformers = []
-        if categorical_cols:
-            transformers.append(('cat', OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=False), categorical_cols))
-        if numerical_cols:
-            transformers.append(('num', 'passthrough', numerical_cols))
-
-        preprocessor = ColumnTransformer(transformers=transformers)
-
-        # Create imputer with configurable strategy
-        if self.impute_strategy == 'constant':
-            imputer = SimpleImputer(strategy='constant', fill_value=self.impute_fill_value)
-        else:
-            imputer = SimpleImputer(strategy=self.impute_strategy)
+            preprocessor = self.data.get_preprocessor()
 
         # Create classifier model
         model = self.create_model()
 
         # Build pipeline
         pipeline = Pipeline([
-            ('preprocessing', preprocessor),
-            ('imputer', imputer),
+            ('preprocessor', preprocessor),
             ('classifier', model)
         ])
 
@@ -154,7 +107,7 @@ class BinaryClassifier(ABC):
         Returns:
             List of feature names
         """
-        preprocessor = pipeline.named_steps['preprocessing']
+        preprocessor = pipeline.named_steps['preprocessor']
         return list(preprocessor.get_feature_names_out())
 
     def train(self):
@@ -271,10 +224,17 @@ class BinaryClassifier(ABC):
 
         X, y = self.data.get_X_y()
 
+        # Generate seeds for each repeat
+        # If random_state is None, use repeat index; otherwise add to random_state
+        if self.random_state is None:
+            seeds = list(range(num_repeats))
+        else:
+            seeds = [self.random_state + repeat for repeat in range(num_repeats)]
+
         # Run repeats in parallel
         results = Parallel(n_jobs=n_jobs)(
             delayed(self._run_single_drop_repeat)(
-                repeat, self.random_state + repeat, X, y, cv_folds, num_repeats
+                repeat, seeds[repeat], X, y, cv_folds, num_repeats
             )
             for repeat in range(num_repeats)
         )
@@ -456,6 +416,9 @@ class BinaryClassifier(ABC):
             raise NotImplementedError(
                 f"{type(self.data).__name__} does not implement load_and_prepare_test()"
             )
+
+        # Prepare data for submission (compute any combined train+test statistics)
+        self.data.prepare_for_submission(test_filepath)
 
         # Train on full training dataset
         print("Training model on full training dataset...")

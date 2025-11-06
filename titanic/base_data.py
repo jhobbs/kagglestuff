@@ -26,12 +26,34 @@ class BinaryClassificationData(ABC):
         self.y = None
         self._prepared = False
 
-    @abstractmethod
-    def load_data(self):
-        """Load raw data from file.
+    def prepare_for_submission(self, test_filepath):
+        """Prepare data class for submission by computing stats from train+test combined.
+
+        This is called before training when generating competition submissions.
+        Subclasses can override to compute features that need the full dataset.
+
+        Args:
+            test_filepath: Path to test CSV file
 
         Returns:
-            DataFrame containing the raw data
+            None
+        """
+        # Default implementation does nothing
+        pass
+
+    @abstractmethod
+    def load_data(self):
+        """Load raw data, engineer features, and return prepared (X, y).
+
+        This method should:
+        1. Load CSV into self.raw_data
+        2. Engineer features into self.processed_data
+        3. Extract X (features) and y (target)
+        4. Store in self.X and self.y
+        5. Return (X, y) tuple
+
+        Returns:
+            Tuple of (X, y) where X is feature DataFrame and y is target Series
         """
         pass
 
@@ -62,64 +84,36 @@ class BinaryClassificationData(ABC):
         pass
 
     @abstractmethod
-    def get_categorical_feature_columns(self):
-        """Return list of feature column names that are categorical.
+    def get_preprocessor(self, feature_columns=None):
+        """Return unfitted sklearn ColumnTransformer for preprocessing features.
 
-        These will be one-hot encoded in the pipeline.
+        The ColumnTransformer should define all preprocessing steps including:
+        - Imputation strategies for numeric and categorical features
+        - Scaling/normalization for numeric features
+        - One-hot encoding for categorical features
 
-        Returns:
-            List of column names
-        """
-        pass
-
-    @abstractmethod
-    def get_numerical_feature_columns(self):
-        """Return list of feature column names that are numerical.
-
-        These will be passed through without encoding.
+        Args:
+            feature_columns: Optional list of feature column names to include.
+                           If None, uses all available features. This allows
+                           creating preprocessors for subsets of features
+                           (e.g., for drop-column importance testing).
 
         Returns:
-            List of column names
+            Unfitted sklearn ColumnTransformer instance
         """
         pass
-
-    def prepare_features(self):
-        """Prepare feature matrix X and target vector y.
-
-        Loads data, engineers features, and creates model-ready DataFrame.
-        NOTE: One-hot encoding is now handled in the sklearn Pipeline.
-        """
-        if self._prepared:
-            return
-
-        # Load data if not already loaded
-        if self.raw_data is None:
-            self.load_data()
-
-        # Engineer features if not already done
-        if self.processed_data is None:
-            self.processed_data = self.raw_data.copy()
-            self.engineer_features()
-
-        # Get target
-        self.y = self.processed_data[self.get_target_column()]
-
-        # Get feature columns
-        feature_cols = self.get_feature_columns()
-
-        # Create feature matrix WITHOUT one-hot encoding (handled in Pipeline now)
-        self.X = self.processed_data[feature_cols].copy()
-
-        self._prepared = True
 
     def get_X_y(self):
         """Return prepared feature matrix and target vector.
+
+        Calls load_data() if data hasn't been loaded yet.
 
         Returns:
             Tuple of (X, y) where X is feature DataFrame and y is target Series
         """
         if not self._prepared:
-            self.prepare_features()
+            self.load_data()
+            self._prepared = True
         return self.X, self.y
 
     def get_numeric_columns(self):
@@ -128,11 +122,10 @@ class BinaryClassificationData(ABC):
         Returns:
             List of column names that are numeric/continuous
         """
-        if not self._prepared:
-            self.prepare_features()
+        X, _ = self.get_X_y()
 
         # Numeric columns are those with float dtype
-        numeric_cols = self.X.select_dtypes(include=['float64', 'float32']).columns.tolist()
+        numeric_cols = X.select_dtypes(include=['float64', 'float32']).columns.tolist()
         return numeric_cols
 
     def get_categorical_columns(self):
@@ -143,13 +136,12 @@ class BinaryClassificationData(ABC):
         Returns:
             List of column names that are categorical/discrete
         """
-        if not self._prepared:
-            self.prepare_features()
+        X, _ = self.get_X_y()
 
         # Categorical columns are those with int dtype or object dtype
         # (though after get_dummies, most will be float)
         # For our purposes, columns not in numeric are categorical
-        all_cols = set(self.X.columns)
+        all_cols = set(X.columns)
         numeric_cols = set(self.get_numeric_columns())
         categorical_cols = list(all_cols - numeric_cols)
         return categorical_cols
