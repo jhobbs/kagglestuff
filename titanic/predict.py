@@ -1,9 +1,11 @@
 import argparse
+import re
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score, train_test_split
-from sklearn.inspection import permutation_importance
+from sklearn.inspection import permutation_importance, PartialDependenceDisplay
 
 
 def load_data(filepath):
@@ -13,18 +15,38 @@ def load_data(filepath):
     return data
 
 
+def tokenize_ticket(ticket):
+    """
+    Tokenize a ticket string by splitting on punctuation and whitespace.
+    Returns a set of lowercase tokens.
+    """
+    if pd.isna(ticket):
+        return set()
+
+    # Split on punctuation and whitespace, keep only alphabetic tokens
+    tokens = re.findall(r'[a-zA-Z]+', str(ticket))
+
+    # Lowercase and return as set
+    return set(token.lower() for token in tokens)
+
+
 def parse_ticket(t):
-    """Parse ticket information into code and number."""
+    """Parse ticket information into number only."""
     if pd.isna(t):
-        return pd.Series([None, None])
+        return None
     parts = t.split()
     if len(parts) == 2:
-        code, number = parts[0], parts[1]
+        number = parts[1]
     elif len(parts) == 3:
-        code, number = parts[0] + parts[1], parts[2]
+        number = parts[2]
     else:
-        code, number = None, parts[0]
-    return pd.Series([code, number])
+        number = parts[0]
+
+    # Convert to numeric, return None if not a valid number
+    try:
+        return float(number)
+    except:
+        return None
 
 
 def engineer_features(data):
@@ -42,22 +64,52 @@ def engineer_features(data):
     data["Cabin"] = data["Cabin"].fillna("Unknown")
     data["Cabin_count"] = data['Cabin'].str.split().str.len()
     data["Deck"] = data['Cabin'].str[0]
-    data[["Ticket_code", "Ticket_number"]] = data["Ticket"].apply(parse_ticket)
-    data["Ticket_number"] = pd.to_numeric(data["Ticket_number"], errors="coerce")
+
+    # Parse ticket number
+    data["Ticket_number"] = data["Ticket"].apply(parse_ticket)
+
+    # Calculate ticket number length (log10 gives approximate number of digits)
+    data["Ticket_number_length"] = data["Ticket_number"].apply(
+        lambda x: np.log10(x) if pd.notna(x) and x > 0 else np.nan
+    )
+
+    # Tokenize ticket codes and create boolean features
+    # First, get all unique tokens across all tickets
+    all_tokens = set()
+    for ticket in data["Ticket"]:
+        all_tokens.update(tokenize_ticket(ticket))
+
+    # Create boolean feature for each token
+    for token in sorted(all_tokens):
+        feature_name = f"ticket_token_{token}"
+        data[feature_name] = data["Ticket"].apply(
+            lambda x: 1 if token in tokenize_ticket(x) else 0
+        )
+
     return data
 
 
 def get_feature_list():
-    """Return the list of features to use in the model."""
+    """Return the list of base features to use in the model."""
     return ["Pclass", "Sex", "SibSp", "Parch", "Age", "Name_length", "Name_words",
             "Same_lastname_count", "Fare", "Embarked", "Cabin_count", "Deck",
-            "Ticket_code", "Ticket_number"]
+            "Ticket_number", "Ticket_number_length"]
 
 
 def prepare_features(data, feature_columns):
     """Prepare feature matrix and target variable."""
     y = data["Survived"]
-    X = pd.get_dummies(data[feature_columns])
+
+    # Add dynamically created ticket token features
+    ticket_token_cols = [col for col in data.columns if col.startswith('ticket_token_')]
+    all_features = feature_columns + ticket_token_cols
+
+    X = pd.get_dummies(data[all_features])
+
+    # Convert all numeric columns to float to avoid sklearn warnings
+    numeric_cols = X.select_dtypes(include=['int64', 'int32']).columns
+    X[numeric_cols] = X[numeric_cols].astype(float)
+
     return X, y
 
 
@@ -140,6 +192,86 @@ def calculate_feature_importance(args):
     return importances
 
 
+def calculate_drop_column_importance(args):
+    """Calculate feature importance by dropping each column and measuring performance drop."""
+    print(f"\n=== Calculating Drop-Column Importance ===")
+    print(f"Parameters: n_estimators={args.n_estimators}, max_depth={args.max_depth}, cv_folds={args.cv_folds}, num_repeats={args.num_repeats}\n")
+
+    # Load and prepare data
+    train_data = load_data(args.data)
+    train_data = engineer_features(train_data)
+    features = get_feature_list()
+    X, y = prepare_features(train_data, features)
+
+    from sklearn.model_selection import StratifiedKFold
+
+    # Store importance values across all repeats
+    all_importances = {col: [] for col in X.columns}
+    all_base_scores = []
+
+    # Repeat calculation with different random seeds
+    for repeat in range(args.num_repeats):
+        seed = 42 + repeat
+        if args.num_repeats > 1:
+            print(f"\n--- Repeat {repeat + 1}/{args.num_repeats} (seed={seed}) ---")
+
+        # Use a fixed CV splitter for consistency within this repeat
+        cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=seed)
+
+        # Create model
+        model = RandomForestClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            random_state=seed
+        )
+
+        # Get baseline score with all features
+        print(f"Computing baseline score with all {len(X.columns)} features...")
+        base_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
+        base_score = base_scores.mean()
+        all_base_scores.append(base_score)
+
+        print(f"Baseline accuracy: {base_score:.4f} (+/- {base_scores.std():.4f})\n")
+        print(f"Computing drop-column importance for each feature...")
+
+        # Calculate importance by dropping each column
+        for i, col in enumerate(X.columns, 1):
+            # Drop one column and evaluate
+            reduced_X = X.drop(columns=[col])
+            cv_scores = cross_val_score(model, reduced_X, y, cv=cv, scoring='accuracy')
+            score = cv_scores.mean()
+            importance = base_score - score  # positive = important (dropping it hurts)
+
+            all_importances[col].append(importance)
+            print(f"  [{i}/{len(X.columns)}] {col}: {importance:+.4f} (score without: {score:.4f})")
+
+    # Calculate mean and std of importances
+    mean_importances = {col: np.mean(vals) for col, vals in all_importances.items()}
+    std_importances = {col: np.std(vals) for col, vals in all_importances.items()}
+
+    # Convert to sorted series
+    importance_series = pd.Series(mean_importances).sort_values(ascending=False)
+
+    # Print final results
+    print(f"\n=== Drop-Column Importance (sorted) ===")
+    mean_base = np.mean(all_base_scores)
+    std_base = np.std(all_base_scores)
+    if args.num_repeats > 1:
+        print(f"Baseline with all features: {mean_base:.4f} (+/- {std_base:.4f})\n")
+    else:
+        print(f"Baseline with all features: {mean_base:.4f}\n")
+
+    for feature in importance_series.index:
+        imp = mean_importances[feature]
+        if args.num_repeats > 1:
+            std = std_importances[feature]
+            print(f"{feature:40s}: {imp:+.4f} (+/- {std:.4f})")
+        else:
+            print(f"{feature:40s}: {imp:+.4f}")
+
+    return importance_series
+
+
 def train_final_model(args):
     """Train a final model on all data."""
     print(f"\n=== Training Final Model ===")
@@ -161,6 +293,78 @@ def train_final_model(args):
 
     print("Model trained successfully on full dataset")
     return model
+
+
+def plot_partial_dependence(args):
+    """Generate partial dependence plots for specified features."""
+    print(f"\n=== Generating Partial Dependence Plots ===")
+    print(f"Parameters: n_estimators={args.n_estimators}, max_depth={args.max_depth}\n")
+
+    # Load and prepare data
+    train_data = load_data(args.data)
+    train_data = engineer_features(train_data)
+    features = get_feature_list()
+    X, y = prepare_features(train_data, features)
+
+    # Train model
+    model = RandomForestClassifier(
+        n_estimators=args.n_estimators,
+        max_depth=args.max_depth,
+        random_state=42
+    )
+    model.fit(X, y)
+
+    # Determine which features to plot
+    if args.features:
+        plot_features = args.features
+    else:
+        # Auto-detect numerical features (not one-hot encoded)
+        # One-hot encoded features typically only have values 0 and 1
+        # Numerical features have more diverse values
+        plot_features = []
+        for col in X.columns:
+            unique_vals = X[col].dropna().unique()
+            # Include if: more than 2 unique values, OR has non-binary values
+            if len(unique_vals) > 2 or not set(unique_vals).issubset({0.0, 1.0}):
+                plot_features.append(col)
+
+        print(f"Auto-detected {len(plot_features)} numerical features")
+
+    # Filter to only features that exist in X
+    valid_features = [f for f in plot_features if f in X.columns]
+
+    if not valid_features:
+        print(f"Error: None of the specified features {plot_features} exist in the dataset")
+        print(f"Available features: {list(X.columns)}")
+        return
+
+    print(f"Plotting partial dependence for: {valid_features}\n")
+
+    # Calculate figure size based on number of features
+    # Use 3 columns max, calculate rows needed
+    n_features = len(valid_features)
+    n_cols = min(3, n_features)
+    n_rows = (n_features + n_cols - 1) // n_cols
+
+    # Make figure bigger: 6 inches per column, 5 inches per row
+    fig_width = n_cols * 6
+    fig_height = n_rows * 5
+
+    # Create the partial dependence plot with custom figure size
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    display = PartialDependenceDisplay.from_estimator(
+        model, X, valid_features,
+        kind='average',
+        random_state=42,
+        ax=ax
+    )
+
+    plt.tight_layout()
+    plt.savefig('partial_dependence.png', dpi=150, bbox_inches='tight')
+    print(f"Partial dependence plot saved to: partial_dependence.png")
+    plt.show()
+
+    return display
 
 
 def main():
@@ -194,9 +398,23 @@ def main():
     importance_parser.add_argument('--n-repeats', type=int, default=10,
                                   help='Number of times to permute a feature (default: 10)')
 
+    # Drop-column importance command
+    drop_importance_parser = subparsers.add_parser('drop-importance', parents=[parent_parser],
+                                                   help='Calculate drop-column importance')
+    drop_importance_parser.add_argument('--cv-folds', type=int, default=5,
+                                       help='Number of cross-validation folds (default: 5)')
+    drop_importance_parser.add_argument('--num-repeats', type=int, default=1,
+                                       help='Number of times to repeat calculation with different seeds (default: 1)')
+
     # Train command
     train_parser = subparsers.add_parser('train', parents=[parent_parser],
                                         help='Train final model on all data')
+
+    # Partial dependence plot command
+    pdp_parser = subparsers.add_parser('pdp', parents=[parent_parser],
+                                       help='Generate partial dependence plots')
+    pdp_parser.add_argument('--features', nargs='+', type=str,
+                           help='Features to plot (default: all numerical features)')
 
     args = parser.parse_args()
 
@@ -205,8 +423,12 @@ def main():
         run_cross_validation(args)
     elif args.command == 'importance':
         calculate_feature_importance(args)
+    elif args.command == 'drop-importance':
+        calculate_drop_column_importance(args)
     elif args.command == 'train':
         train_final_model(args)
+    elif args.command == 'pdp':
+        plot_partial_dependence(args)
     else:
         parser.print_help()
 
