@@ -44,6 +44,12 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
                                       help='Run cross-validation')
     cv_parser.add_argument('--cv-folds', type=int, default=5,
                           help='Number of cross-validation folds (default: 5)')
+    cv_parser.add_argument('--scoring', type=str, default='accuracy',
+                          help='Scoring metric(s) - comma-separated: accuracy,f1,roc_auc,precision,recall (default: accuracy)')
+    cv_parser.add_argument('--find-threshold', action='store_true',
+                          help='Find optimal classification threshold by maximizing F1 score')
+    cv_parser.add_argument('--threshold', type=float, default=None,
+                          help='Evaluate CV with specific classification threshold (default: None, uses 0.5)')
 
     # Feature importance command
     importance_parser = subparsers.add_parser('importance', parents=[parent_parser],
@@ -79,6 +85,18 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     inspect_parser.add_argument('--test-data', type=str, default='./test.csv',
                                help='Path to test data for categorical value inspection (default: ./test.csv)')
 
+    # Suggest features command
+    suggest_parser = subparsers.add_parser('suggest-features', parents=[parent_parser],
+                                          help='Analyze features and suggest improvements')
+    suggest_parser.add_argument('--correlation-threshold', type=float, default=0.9,
+                               help='Threshold for identifying highly correlated features (default: 0.9)')
+    suggest_parser.add_argument('--variance-threshold', type=float, default=0.01,
+                               help='Threshold for identifying low variance features (default: 0.01)')
+    suggest_parser.add_argument('--missing-threshold', type=float, default=0.5,
+                               help='Threshold for flagging high missing rate features (default: 0.5)')
+    suggest_parser.add_argument('--univariate-threshold', type=float, default=0.05,
+                               help='P-value threshold for univariate feature selection (default: 0.05)')
+
     # Submit command (for Kaggle competitions)
     submit_parser = subparsers.add_parser('submit', parents=[parent_parser],
                                          help='Train model and generate predictions for test data')
@@ -86,8 +104,15 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
                               help='Path to test data (default: ./test.csv)')
     submit_parser.add_argument('--output', type=str, default='submission.csv',
                               help='Path to save submission file (default: submission.csv)')
+    submit_parser.add_argument('--threshold', type=float, default=0.45,
+                              help='Classification threshold for positive class (default: 0.45)')
 
     args = parser.parse_args()
+
+    # Check if no command was provided
+    if args.command is None:
+        parser.print_help()
+        return
 
     # Initialize data class
     data = data_class(args.data)
@@ -106,7 +131,11 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
 
     # Execute the appropriate command
     if args.command == 'cv':
-        classifier.cross_validate(cv_folds=args.cv_folds)
+        # Parse comma-separated scoring metrics
+        scoring_list = [s.strip() for s in args.scoring.split(',')]
+        scoring = scoring_list[0] if len(scoring_list) == 1 else tuple(scoring_list)
+        classifier.cross_validate(cv_folds=args.cv_folds, scoring=scoring,
+                                 find_threshold=args.find_threshold, threshold=args.threshold)
     elif args.command == 'importance':
         classifier.calculate_feature_importance(n_repeats=args.n_repeats)
     elif args.command == 'drop-importance':
@@ -128,10 +157,16 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
             data.inspect_data(test_filepath=args.test_data)
         else:
             data.inspect_data()
+    elif args.command == 'suggest-features':
+        classifier.suggest_features(
+            correlation_threshold=args.correlation_threshold,
+            variance_threshold=args.variance_threshold,
+            missing_threshold=args.missing_threshold,
+            univariate_threshold=args.univariate_threshold
+        )
     elif args.command == 'submit':
         classifier.predict_submission(
             test_filepath=args.test_data,
-            output_file=args.output
+            output_file=args.output,
+            threshold=args.threshold
         )
-    else:
-        parser.print_help()
