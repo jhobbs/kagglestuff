@@ -122,7 +122,7 @@ class BinaryClassifier(ABC):
         print(f"Parameters: {self.model_params}\n")
 
         X, y = self.data.get_X_y()
-        self.model = self.create_pipeline()
+        self.model = self.create_pipeline(X)
         self.model.fit(X, y)
 
         print("Model trained successfully on full dataset")
@@ -163,7 +163,7 @@ class BinaryClassifier(ABC):
         print()
 
         X, y = self.data.get_X_y()
-        pipeline = self.create_pipeline()
+        pipeline = self.create_pipeline(X)
 
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
         results = cross_validate(
@@ -377,7 +377,7 @@ class BinaryClassifier(ABC):
         )
 
         # Train pipeline
-        pipeline = self.create_pipeline()
+        pipeline = self.create_pipeline(X_train)
         pipeline.fit(X_train, y_train)
 
         # Calculate permutation importance
@@ -857,6 +857,18 @@ class BinaryClassifier(ABC):
             suggestions['features_to_drop'] = sorted(features_to_drop)
             suggestions['remaining_features'] = remaining_features
 
+            # Show how to exclude these features
+            print(f"\n=== How to Exclude These Features ===")
+            print(f"\nMethod 1: Using --exclude-features CLI parameter")
+            features_str = ','.join(sorted(features_to_drop))
+            print(f"  python predict.py cv --exclude-features \"{features_str}\"")
+
+            print(f"\nMethod 2: Programmatically in Python")
+            print(f"  from titanic_data import TitanicData")
+            print(f"  data = TitanicData('./train.csv')")
+            print(f"  data.excluded_features = {sorted(features_to_drop)}")
+            print(f"  X, y = data.get_X_y()  # Returns features with exclusions applied")
+
         return suggestions
 
     def plot_partial_dependence(self, features=None, output_file='partial_dependence.png'):
@@ -875,7 +887,7 @@ class BinaryClassifier(ABC):
         X, y = self.data.get_X_y()
 
         # Train pipeline
-        pipeline = self.create_pipeline()
+        pipeline = self.create_pipeline(X)
         pipeline.fit(X, y)
 
         # Determine which features to plot
@@ -961,7 +973,7 @@ class BinaryClassifier(ABC):
         # Train on full training dataset
         print("Training model on full training dataset...")
         X, y = self.data.get_X_y()
-        pipeline = self.create_pipeline()
+        pipeline = self.create_pipeline(X)
         pipeline.fit(X, y)
         print(f"Model trained on {len(X)} samples\n")
 

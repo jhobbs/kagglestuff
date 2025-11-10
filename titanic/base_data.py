@@ -13,13 +13,15 @@ class BinaryClassificationData(ABC):
     Subclasses must implement dataset-specific logic.
     """
 
-    def __init__(self, filepath):
+    def __init__(self, filepath, excluded_features=None):
         """Initialize with path to data file.
 
         Args:
             filepath: Path to CSV file containing the data
+            excluded_features: List of feature names to exclude from the model (default: None)
         """
         self.filepath = filepath
+        self.excluded_features = excluded_features if excluded_features is not None else []
         self.raw_data = None
         self.processed_data = None
         self.X = None
@@ -107,6 +109,7 @@ class BinaryClassificationData(ABC):
         """Return prepared feature matrix and target vector.
 
         Calls load_data() if data hasn't been loaded yet.
+        Filters out excluded features if any are specified.
 
         Returns:
             Tuple of (X, y) where X is feature DataFrame and y is target Series
@@ -114,6 +117,14 @@ class BinaryClassificationData(ABC):
         if not self._prepared:
             self.load_data()
             self._prepared = True
+
+        # Filter out excluded features
+        if self.excluded_features:
+            features_to_drop = [f for f in self.excluded_features if f in self.X.columns]
+            if features_to_drop:
+                X_filtered = self.X.drop(columns=features_to_drop)
+                return X_filtered, self.y
+
         return self.X, self.y
 
     def get_numeric_columns(self):

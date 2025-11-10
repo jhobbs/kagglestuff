@@ -13,13 +13,23 @@ from base_data import BinaryClassificationData
 class TitanicData(BinaryClassificationData):
     """Titanic dataset implementation with domain-specific feature engineering."""
 
-    def __init__(self, filepath):
+    # Class-level feature exclusions - set your excluded features here
+    excluded_features = ['Deck_A', 'Deck_G', 'Deck_T', 'SibSp', 'ticket_token_ah', 'ticket_token_basle', 'ticket_token_c', 'ticket_token_e', 'ticket_token_fa', 'ticket_token_line', 'ticket_token_p', 'ticket_token_paris', 'ticket_token_sc', 'ticket_token_sco', 'ticket_token_so', 'ticket_token_ston', 'ticket_token_sw', 'ticket_token_we']
+    # Example:
+    # excluded_features = ['Deck_A', 'Deck_G', 'Deck_T', 'SibSp']
+
+    def __init__(self, filepath, excluded_features=None):
         """Initialize with path to data file.
 
         Args:
             filepath: Path to CSV file containing the data
+            excluded_features: List of feature names to exclude from the model
+                             (default: None, uses class-level excluded_features)
         """
-        super().__init__(filepath)
+        # Use parameter if provided, otherwise use class-level attribute
+        if excluded_features is None:
+            excluded_features = self.__class__.excluded_features
+        super().__init__(filepath, excluded_features=excluded_features)
         self.ticket_tokens = None  # Store discovered ticket tokens from training data
         self.lastname_counts = None  # Store lastname counts from combined train+test data
         self.all_lastnames = None  # All unique lastnames from train+test

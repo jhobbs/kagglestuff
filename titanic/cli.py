@@ -22,6 +22,8 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
                               help=f'Path to training data (default: {default_data_path})')
     parent_parser.add_argument('--random-state', type=int, default=None,
                               help='Random seed for reproducibility (default: None, uses random seed)')
+    parent_parser.add_argument('--exclude-features', type=str, default=None,
+                              help='Comma-separated list of features to exclude from the model')
 
     # Dynamically add classifier-specific arguments
     classifier_args = classifier_class.get_cli_arguments()
@@ -114,8 +116,17 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
         parser.print_help()
         return
 
+    # Parse excluded features if provided
+    excluded_features = None
+    if args.exclude_features:
+        excluded_features = [f.strip() for f in args.exclude_features.split(',')]
+        print(f"\n=== Excluding {len(excluded_features)} features ===")
+        for feat in excluded_features:
+            print(f"  - {feat}")
+        print()
+
     # Initialize data class
-    data = data_class(args.data)
+    data = data_class(args.data, excluded_features=excluded_features)
 
     # Extract classifier-specific parameters from args
     classifier_kwargs = {}
