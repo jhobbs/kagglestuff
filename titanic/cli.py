@@ -109,6 +109,26 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     submit_parser.add_argument('--threshold', type=float, default=0.45,
                               help='Classification threshold for positive class (default: 0.45)')
 
+    # Hyperparameter search command
+    search_parser = subparsers.add_parser('search', parents=[parent_parser],
+                                         help='Perform hyperparameter search (grid or random)')
+    search_parser.add_argument('--search-type', type=str, choices=['grid', 'random'],
+                              default='grid',
+                              help='Search method: grid for GridSearchCV, random for RandomizedSearchCV (default: grid)')
+    search_parser.add_argument('--space', type=str, choices=['narrow', 'default', 'wide'],
+                              default='default',
+                              help='Parameter space size: narrow (fast), default (balanced), wide (comprehensive) (default: default)')
+    search_parser.add_argument('--cv-folds', type=int, default=5,
+                              help='Number of cross-validation folds (default: 5)')
+    search_parser.add_argument('--n-iter', type=int, default=50,
+                              help='Number of iterations for random search (default: 50, ignored for grid search)')
+    search_parser.add_argument('--scoring', type=str, default='accuracy',
+                              help='Scoring metric: accuracy, f1, roc_auc, precision, recall (default: accuracy)')
+    search_parser.add_argument('--n-jobs', type=int, default=-1,
+                              help='Number of parallel jobs, -1 uses all cores (default: -1)')
+    search_parser.add_argument('--verbose', type=int, default=2, choices=[0, 1, 2, 3],
+                              help='Verbosity level: 0=silent, 1=minimal, 2=detailed, 3=very detailed (default: 2)')
+
     args = parser.parse_args()
 
     # Check if no command was provided
@@ -180,4 +200,16 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
             test_filepath=args.test_data,
             output_file=args.output,
             threshold=args.threshold
+        )
+    elif args.command == 'search':
+        # Get parameter grid for the specified space
+        param_grid = classifier_class.get_param_grid(search_type=args.space)
+        classifier.hyperparameter_search(
+            param_grid=param_grid,
+            search_type=args.search_type,
+            cv_folds=args.cv_folds,
+            n_iter=args.n_iter,
+            scoring=args.scoring,
+            n_jobs=args.n_jobs,
+            verbose=args.verbose
         )

@@ -84,6 +84,50 @@ class RandomForestBinaryClassifier(BinaryClassifier):
             }
         ]
 
+    @classmethod
+    def get_param_grid(cls, search_type='default'):
+        """Return Random Forest parameter grid for hyperparameter search.
+
+        Args:
+            search_type: Type of search space:
+                - 'narrow': Small search space around current defaults (fast)
+                - 'default': Moderate search space (recommended)
+                - 'wide': Large search space (comprehensive but slow)
+
+        Returns:
+            Dict mapping parameter names to lists of values
+        """
+        if search_type == 'narrow':
+            # Quick search around current defaults
+            return {
+                'classifier__n_estimators': [200, 300, 400],
+                'classifier__max_depth': [8, 10, 12, 15],
+                'classifier__min_samples_leaf': [1, 2, 3],
+                'classifier__min_samples_split': [2, 4, 6],
+                'classifier__max_features': ['sqrt', 'log2']
+            }
+        elif search_type == 'default':
+            # Moderate search space
+            return {
+                'classifier__n_estimators': [100, 200, 300, 500],
+                'classifier__max_depth': [5, 10, 15, 20, 25],
+                'classifier__min_samples_leaf': [1, 2, 4, 8],
+                'classifier__min_samples_split': [2, 4, 8, 16],
+                'classifier__max_features': ['sqrt', 'log2', None]
+            }
+        elif search_type == 'wide':
+            # Comprehensive search space
+            return {
+                'classifier__n_estimators': [50, 100, 200, 300, 500, 700, 1000],
+                'classifier__max_depth': [3, 5, 7, 10, 15, 20, 25, 30, None],
+                'classifier__min_samples_leaf': [1, 2, 4, 8, 16],
+                'classifier__min_samples_split': [2, 4, 8, 16, 32],
+                'classifier__max_features': ['sqrt', 'log2', 0.5, 0.7, None],
+                'classifier__class_weight': [None, 'balanced']
+            }
+        else:
+            raise ValueError(f"search_type must be 'narrow', 'default', or 'wide', got '{search_type}'")
+
     def create_model(self):
         """Create a new RandomForestClassifier instance.
 

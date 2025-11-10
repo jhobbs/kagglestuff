@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.model_selection import cross_val_score, cross_validate, train_test_split, StratifiedKFold
+from sklearn.model_selection import cross_val_score, cross_validate, train_test_split, StratifiedKFold, GridSearchCV, RandomizedSearchCV
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_recall_curve, make_scorer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
@@ -57,6 +57,26 @@ class BinaryClassifier(ABC):
             ]
         """
         return []
+
+    @classmethod
+    def get_param_grid(cls, search_type='default'):
+        """Return parameter grid for hyperparameter search.
+
+        Subclasses should override to define their search space.
+
+        Args:
+            search_type: Type of search space - 'default', 'narrow', or 'wide'
+
+        Returns:
+            Dict mapping parameter names to lists of values to try
+
+        Example:
+            {
+                'classifier__n_estimators': [100, 200, 300],
+                'classifier__max_depth': [10, 20, 30, None]
+            }
+        """
+        return {}
 
     @abstractmethod
     def create_model(self):
@@ -236,6 +256,133 @@ class BinaryClassifier(ABC):
             print(fold_str)
 
         return results
+
+    def hyperparameter_search(self, param_grid=None, search_type='grid',
+                             cv_folds=5, n_iter=50, scoring='accuracy',
+                             n_jobs=-1, verbose=2):
+        """Perform hyperparameter search using GridSearchCV or RandomizedSearchCV.
+
+        Args:
+            param_grid: Dict of parameter names to lists/distributions of values.
+                       If None, uses get_param_grid() from the classifier class.
+            search_type: 'grid' for exhaustive GridSearchCV or 'random' for RandomizedSearchCV
+            cv_folds: Number of cross-validation folds
+            n_iter: Number of iterations for random search (ignored for grid search)
+            scoring: Scoring metric - e.g., 'accuracy', 'f1', 'roc_auc'
+            n_jobs: Number of parallel jobs (-1 uses all cores)
+            verbose: Verbosity level (0=silent, 1=minimal, 2=detailed, 3=very detailed)
+
+        Returns:
+            GridSearchCV or RandomizedSearchCV fitted object with results
+        """
+        print(f"\n=== Hyperparameter Search ===")
+        print(f"Search type: {search_type}")
+        print(f"CV folds: {cv_folds}")
+        print(f"Scoring: {scoring}")
+
+        X, y = self.data.get_X_y()
+        pipeline = self.create_pipeline(X)
+
+        # Get parameter grid
+        if param_grid is None:
+            param_grid = self.get_param_grid()
+            if not param_grid:
+                raise ValueError(
+                    f"{type(self).__name__} does not define a default param_grid. "
+                    "Please provide param_grid argument or implement get_param_grid() class method."
+                )
+
+        print(f"\nSearching over {len(param_grid)} parameters:")
+        total_combinations = 1
+        for param_name, param_values in param_grid.items():
+            n_values = len(param_values) if isinstance(param_values, (list, tuple)) else 'continuous'
+            print(f"  {param_name}: {param_values}")
+            if isinstance(n_values, int):
+                total_combinations *= n_values
+
+        if search_type == 'grid':
+            print(f"\nTotal combinations to test: {total_combinations}")
+            print(f"Total fits: {total_combinations * cv_folds}")
+
+            search = GridSearchCV(
+                estimator=pipeline,
+                param_grid=param_grid,
+                cv=StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state),
+                scoring=scoring,
+                n_jobs=n_jobs,
+                verbose=verbose,
+                return_train_score=True,
+                refit=True
+            )
+        elif search_type == 'random':
+            print(f"\nRandom search iterations: {n_iter}")
+            print(f"Total fits: {n_iter * cv_folds}")
+
+            search = RandomizedSearchCV(
+                estimator=pipeline,
+                param_distributions=param_grid,
+                n_iter=n_iter,
+                cv=StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state),
+                scoring=scoring,
+                n_jobs=n_jobs,
+                verbose=verbose,
+                return_train_score=True,
+                refit=True,
+                random_state=self.random_state
+            )
+        else:
+            raise ValueError(f"search_type must be 'grid' or 'random', got '{search_type}'")
+
+        # Perform search
+        print(f"\nStarting search...\n")
+        search.fit(X, y)
+
+        # Display results
+        print("\n" + "="*80)
+        print("=== Search Results ===")
+        print("="*80)
+
+        print(f"\nBest {scoring} score: {search.best_score_:.4f}")
+        print(f"\nBest parameters:")
+        for param_name, param_value in sorted(search.best_params_.items()):
+            # Remove 'classifier__' prefix for cleaner display
+            display_name = param_name.replace('classifier__', '')
+            print(f"  {display_name}: {param_value}")
+
+        # Show top 10 parameter combinations
+        results_df = pd.DataFrame(search.cv_results_)
+
+        # Sort by mean test score
+        results_df = results_df.sort_values('mean_test_score', ascending=False)
+
+        print(f"\n=== Top 10 Parameter Combinations ===\n")
+        print(f"{'Rank':<6} {'Mean Score':<12} {'Std Score':<12} {'Parameters'}")
+        print("-" * 80)
+
+        for idx, (i, row) in enumerate(results_df.head(10).iterrows(), 1):
+            params_str = ', '.join([
+                f"{k.replace('classifier__', '')}={v}"
+                for k, v in row['params'].items()
+            ])
+            print(f"{idx:<6} {row['mean_test_score']:<12.4f} {row['std_test_score']:<12.4f} {params_str}")
+
+        # Show train vs validation scores for best model
+        best_idx = search.best_index_
+        best_train_score = search.cv_results_['mean_train_score'][best_idx]
+        best_test_score = search.best_score_
+        gap = best_train_score - best_test_score
+
+        print(f"\n=== Best Model Performance ===")
+        print(f"Mean train score: {best_train_score:.4f}")
+        print(f"Mean test score:  {best_test_score:.4f}")
+        print(f"Train-test gap:   {gap:+.4f} (positive = overfit)")
+
+        # Save detailed results
+        output_file = f'hyperparameter_search_results.csv'
+        results_df.to_csv(output_file, index=False)
+        print(f"\nDetailed results saved to: {output_file}")
+
+        return search
 
     def _evaluate_with_threshold(self, X, y, cv, estimators, threshold):
         """Evaluate model using a custom classification threshold.
