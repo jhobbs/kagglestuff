@@ -99,6 +99,18 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
     suggest_parser.add_argument('--univariate-threshold', type=float, default=0.05,
                                help='P-value threshold for univariate feature selection (default: 0.05)')
 
+    # RFECV command
+    rfecv_parser = subparsers.add_parser('rfecv', parents=[parent_parser],
+                                         help='Recursive Feature Elimination with Cross-Validation')
+    rfecv_parser.add_argument('--cv-folds', type=int, default=5,
+                             help='Number of cross-validation folds (default: 5)')
+    rfecv_parser.add_argument('--step', type=int, default=1,
+                             help='Number of features to remove at each iteration (default: 1)')
+    rfecv_parser.add_argument('--scoring', type=str, default='accuracy',
+                             help='Scoring metric: accuracy, f1, roc_auc, precision, recall (default: accuracy)')
+    rfecv_parser.add_argument('--n-jobs', type=int, default=-1,
+                             help='Number of parallel jobs, -1 uses all cores (default: -1)')
+
     # Submit command (for Kaggle competitions)
     submit_parser = subparsers.add_parser('submit', parents=[parent_parser],
                                          help='Train model and generate predictions for test data')
@@ -194,6 +206,13 @@ def create_cli(data_class, classifier_class, default_data_path='./train.csv',
             variance_threshold=args.variance_threshold,
             missing_threshold=args.missing_threshold,
             univariate_threshold=args.univariate_threshold
+        )
+    elif args.command == 'rfecv':
+        classifier.rfecv_analysis(
+            cv_folds=args.cv_folds,
+            step=args.step,
+            scoring=args.scoring,
+            n_jobs=args.n_jobs
         )
     elif args.command == 'submit':
         classifier.predict_submission(

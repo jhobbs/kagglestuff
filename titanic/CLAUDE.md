@@ -57,6 +57,7 @@ source venv/bin/activate
 python predict.py cv --cv-folds 5
 python predict.py importance --n-repeats 10
 python predict.py drop-importance --cv-folds 5 --num-repeats 3
+python predict.py rfecv --cv-folds 5 --scoring accuracy
 python predict.py train
 python predict.py pdp
 python predict.py correlation
@@ -81,6 +82,11 @@ python predict_lr.py cv --C 0.1 --max-iter 500
 - `cv` - Cross-validation with accuracy scoring
 - `importance` - Permutation feature importance
 - `drop-importance` - Feature importance by dropping each column (parallel execution)
+- `rfecv` - Recursive Feature Elimination with Cross-Validation
+  - Automatically determines optimal number of features
+  - Operates on preprocessed features (after one-hot encoding and scaling)
+  - Options: `--cv-folds`, `--step` (features to remove per iteration), `--scoring` (accuracy, f1, roc_auc, etc.)
+  - Generates a plot showing CV scores vs number of features
 - `train` - Train final model on full dataset
 - `pdp` - Partial dependence plots for numerical features
 - `correlation` - Feature correlation heatmap

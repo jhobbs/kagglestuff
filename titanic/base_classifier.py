@@ -11,7 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.feature_selection import SelectKBest, f_classif, chi2
+from sklearn.feature_selection import SelectKBest, f_classif, chi2, RFECV
 from joblib import Parallel, delayed
 import multiprocessing
 
@@ -1017,6 +1017,152 @@ class BinaryClassifier(ABC):
             print(f"  X, y = data.get_X_y()  # Returns features with exclusions applied")
 
         return suggestions
+
+    def rfecv_analysis(self, cv_folds=5, step=1, scoring='accuracy', n_jobs=-1):
+        """Perform Recursive Feature Elimination with Cross-Validation.
+
+        Uses RFECV to determine the optimal number of features and identify
+        which features are most important for model performance.
+
+        Note: RFECV operates on preprocessed features (after one-hot encoding
+        and scaling), not raw input columns.
+
+        Args:
+            cv_folds: Number of cross-validation folds (default: 5)
+            step: Number (or fraction) of features to remove at each iteration (default: 1)
+            scoring: Scoring metric - e.g., 'accuracy', 'f1', 'roc_auc' (default: 'accuracy')
+            n_jobs: Number of parallel jobs (-1 uses all cores, default: -1)
+
+        Returns:
+            RFECV fitted object with results
+        """
+        print(f"\n=== Recursive Feature Elimination with Cross-Validation ===")
+        print(f"Parameters: {self.model_params}")
+        print(f"CV folds: {cv_folds}")
+        print(f"Step size: {step}")
+        print(f"Scoring: {scoring}")
+        print(f"Parallel jobs: {n_jobs}\n")
+
+        X, y = self.data.get_X_y()
+
+        # Create pipeline and fit preprocessor to get feature names
+        pipeline = self.create_pipeline(X)
+
+        # Fit the preprocessor to get transformed feature names
+        print("Preprocessing data...")
+        preprocessor = pipeline.named_steps['preprocessor']
+        preprocessor.fit(X)
+        X_transformed = preprocessor.transform(X)
+        feature_names = list(preprocessor.get_feature_names_out())
+        print(f"After preprocessing: {len(feature_names)} features\n")
+
+        # Create CV splitter
+        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=self.random_state)
+
+        # Create model for RFECV (just the classifier, not the full pipeline)
+        model = self.create_model()
+
+        # Create RFECV selector with the classifier
+        print("Starting RFECV (this may take a while)...")
+        print("Note: RFECV will evaluate feature subsets by retraining the model.\n")
+        rfecv = RFECV(
+            estimator=model,
+            step=step,
+            cv=cv,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            verbose=1
+        )
+
+        # Fit RFECV on preprocessed data
+        rfecv.fit(X_transformed, y)
+
+        # Display results
+        print("\n" + "="*80)
+        print("=== RFECV Results ===")
+        print("="*80)
+
+        print(f"\nOptimal number of features: {rfecv.n_features_}")
+        print(f"Total preprocessed features: {len(feature_names)}")
+        print(f"Features to remove: {len(feature_names) - rfecv.n_features_}")
+
+        # Get selected and rejected features (using preprocessed feature names)
+        selected_features = [feature_names[i] for i, selected in enumerate(rfecv.support_) if selected]
+        rejected_features = [feature_names[i] for i, selected in enumerate(rfecv.support_) if not selected]
+
+        print(f"\n=== Selected Features ({len(selected_features)}) ===")
+        for feat in selected_features:
+            print(f"  {feat}")
+
+        print(f"\n=== Rejected Features ({len(rejected_features)}) ===")
+        for feat in rejected_features:
+            idx = feature_names.index(feat)
+            rank = rfecv.ranking_[idx]
+            print(f"  {feat} (rank: {rank})")
+
+        # Display CV scores vs number of features
+        print(f"\n=== Cross-Validation Scores by Number of Features ===")
+        cv_scores = rfecv.cv_results_['mean_test_score']
+        cv_stds = rfecv.cv_results_['std_test_score']
+
+        # Show scores for key feature counts
+        max_score = np.max(cv_scores)
+        max_idx = np.argmax(cv_scores)
+        optimal_n_features = max_idx + 1
+
+        print(f"\nBest CV score: {max_score:.4f} (±{cv_stds[max_idx]:.4f}) with {optimal_n_features} features")
+
+        # Show scores around the optimal point
+        print(f"\nCV scores around optimal:")
+        start_idx = max(0, max_idx - 2)
+        end_idx = min(len(cv_scores), max_idx + 3)
+        for i in range(start_idx, end_idx):
+            n_features = i + 1
+            score = cv_scores[i]
+            std = cv_stds[i]
+            marker = " <-- optimal" if i == max_idx else ""
+            print(f"  {n_features:3d} features: {score:.4f} (±{std:.4f}){marker}")
+
+        # Plot CV scores vs number of features
+        print(f"\n=== Plotting CV Scores vs Number of Features ===")
+        plt.figure(figsize=(10, 6))
+        n_features_range = range(1, len(cv_scores) + 1)
+        plt.plot(n_features_range, cv_scores, 'o-', linewidth=2, markersize=6)
+        plt.fill_between(n_features_range,
+                        cv_scores - cv_stds,
+                        cv_scores + cv_stds,
+                        alpha=0.2)
+        plt.axvline(x=optimal_n_features, color='r', linestyle='--',
+                   label=f'Optimal: {optimal_n_features} features')
+        plt.xlabel('Number of Features')
+        plt.ylabel(f'Cross-Validation Score ({scoring})')
+        plt.title('RFECV: Feature Selection')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        output_file = 'rfecv_scores.png'
+        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to: {output_file}")
+        plt.close()
+
+        # Show how to use the selected features
+        print(f"\n=== How to Use Selected Features ===")
+        print(f"\nNote: RFECV operates on preprocessed features (after one-hot encoding).")
+        print(f"The feature names shown above are the transformed feature names.")
+        print(f"\nTo use these results:")
+        print(f"1. Identify which raw input features correspond to rejected preprocessed features")
+        print(f"2. Use the suggest-features command for raw feature analysis")
+        print(f"3. Consider the preprocessed feature rankings when doing feature engineering")
+
+        if rejected_features:
+            print(f"\nRejected preprocessed features ({len(rejected_features)}):")
+            for feat in rejected_features[:10]:  # Show first 10
+                print(f"  - {feat}")
+            if len(rejected_features) > 10:
+                print(f"  ... and {len(rejected_features) - 10} more")
+
+        return rfecv
 
     def plot_partial_dependence(self, features=None, output_file='partial_dependence.png'):
         """Generate partial dependence plots.

@@ -116,22 +116,25 @@ class TitanicData(BinaryClassificationData):
         return preprocessor
 
     def get_feature_columns(self):
-        """Return base feature columns plus any dynamically created ones."""
-        base_features = [
-            "Pclass", "Male", "SibSp", "Parch", "Age", "Name_length",
-            "Same_lastname_count", "Fare", "Embarked", "Cabin_count",
-            "Ticket_number", "Ticket_number_length"
-        ]
+        return ["Pclass", "Male", "Age", "Name_length", "Same_lastname_count", "Fare", "Ticket_number", "Ticket_number_length", "Deck_U"]
+
+    #def get_feature_columns(self):
+    #    """Return base feature columns plus any dynamically created ones."""
+    #    base_features = [
+    #        "Pclass", "Male", "SibSp", "Parch", "Age", "Name_length",
+    #        "Same_lastname_count", "Fare", "Embarked", "Cabin_count",
+    #        "Ticket_number", "Ticket_number_length"
+    #    ]
 
         # Add dynamically created ticket token features
-        ticket_token_cols = [col for col in self.processed_data.columns
-                            if col.startswith('ticket_token_')]
+    #    ticket_token_cols = [col for col in self.processed_data.columns
+    #                        if col.startswith('ticket_token_')]
 
         # Add dynamically created deck features (but not Deck_raw which is intermediate)
-        deck_cols = [col for col in self.processed_data.columns
-                    if col.startswith('Deck_') and col != 'Deck_raw']
+    #    deck_cols = [col for col in self.processed_data.columns
+    #                if col.startswith('Deck_') and col != 'Deck_raw']
 
-        return base_features + ticket_token_cols + deck_cols
+     #   return base_features + ticket_token_cols + deck_cols
 
     def get_categorical_feature_columns(self):
         """Return list of categorical feature columns (object dtype).
